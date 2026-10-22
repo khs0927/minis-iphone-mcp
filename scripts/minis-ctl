@@ -133,14 +133,14 @@ def mac_commands():
     lines = [
         "# Run on the Mac (same Wi-Fi as this iPhone).",
         "# 1) fetch the relay helper",
-        "curl -s http://%s/download/claude-relay.py \\" % base,
+        "curl -s %s/download/claude-relay.py \\" % base,
         "  -H 'Authorization: Bearer %s' -o ~/claude-relay.py" % token,
         "",
         "# 2) run the relay (Minis <-> Claude Code on the Mac)",
         "python3 ~/claude-relay.py --url %s --token %s" % (base, token),
         "",
         "# Optional: stable public tunnel (survives the phone suspending)",
-        "curl -s http://%s/download/mac-tunnel.sh \\" % base,
+        "curl -s %s/download/mac-tunnel.sh \\" % base,
         "  -H 'Authorization: Bearer %s' -o ~/mac-tunnel.sh && sh ~/mac-tunnel.sh" % token,
     ]
     if url:
