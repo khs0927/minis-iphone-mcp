@@ -12,6 +12,11 @@ for p in /proc/[0-9]*; do
   [ -r "$p/cmdline" ] || continue
   c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | sed 's/ *$//')
   [ -z "$c" ] && continue
+  # Never touch the keepalive loop: its command line mentions every service
+  # it supervises, so a substring match would kill the supervisor itself.
+  case "$c" in
+    *MINIS_KEEPALIVE_LOOP*) continue ;;
+  esac
   hit=0
   if [ -n "$EXACT" ]; then
     [ "$c" = "$EXACT" ] && hit=1
