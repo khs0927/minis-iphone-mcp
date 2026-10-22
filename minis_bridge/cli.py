@@ -129,6 +129,23 @@ def cmd_stop(args):
             except OSError:
                 pass
     time.sleep(1.0)
+    # Wait for the old listeners to actually release their ports, otherwise the
+    # next start races them and dies with "Address already in use".
+    for _ in range(25):
+        alive = []
+        for d in os.listdir("/proc"):
+            if not d.isdigit():
+                continue
+            try:
+                with open("/proc/%s/cmdline" % d, "rb") as f:
+                    c = f.read().decode("utf-8", "replace").replace("\x00", " ")
+            except OSError:
+                continue
+            if "minis_bridge.server" in c:
+                alive.append(d)
+        if not alive:
+            break
+        time.sleep(0.2)
     print("stopped: %s" % (", ".join(stopped) or "nothing running"))
     return 0
 
