@@ -1,0 +1,47 @@
+#!/bin/sh
+# Stable-URL tunnel for the Minis bridge (ngrok free permanent dev domain).
+#   minis-ngrok start|stop|status|url
+set -e
+STATE_DIR=${MINIS_BRIDGE_STATE_DIR:-/var/minis/shared/claude-bridge}
+TOKF=$STATE_DIR/ngrok_authtoken
+LOG=$STATE_DIR/ngrok.log
+URLF=$STATE_DIR/ngrok-url.txt
+PORT=${ORIGIN_PORT:-8901}
+DOMAIN=${NGROK_DOMAIN:-hailee-aerodynamic-vanesa.ngrok-free.dev}
+MARK=minis-ngrok-forward
+
+alive() {
+  for p in /proc/[0-9]*; do
+    c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+    case "$c" in *ngrok-forward*) return 0;; esac
+  done
+  return 1
+}
+
+case "$1" in
+  start)
+    alive && { echo "already running: $(cat $URLF 2>/dev/null)"; exit 0; }
+    [ -f "$TOKF" ] || { echo "missing $TOKF"; exit 1; }
+    cd /opt/ngrok
+    NGROK_AUTHTOKEN=$(cat "$TOKF") NGROK_DOMAIN=$DOMAIN nohup sh -c "ulimit -s 8192; exec node /opt/ngrok/ngrok-forward.js $PORT # $MARK" >> "$LOG" 2>&1 &
+    i=0
+    while [ $i -lt 40 ]; do
+      sleep 1
+      U=$(rg -o 'https://[a-z0-9-]+\.ngrok-free\.(app|dev)' "$LOG" 2>/dev/null | tail -1)
+      if [ -n "$U" ]; then echo "$U" > "$URLF"; echo "started: $U"; exit 0; fi
+      i=$((i+1))
+    done
+    echo "timeout; see $LOG"; tail -5 "$LOG"; exit 1 ;;
+  stop)
+    for p in /proc/[0-9]*; do
+      c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+      case "$c" in *"$MARK"*|*ngrok-forward.js*) kill "${p#/proc/}" 2>/dev/null;; esac
+    done
+    echo stopped ;;
+  status)
+    alive && echo "NGROK UP" || echo "NGROK DOWN"
+    echo "url: $(cat $URLF 2>/dev/null)"
+    tail -2 "$LOG" 2>/dev/null ;;
+  url) cat "$URLF" 2>/dev/null ;;
+  *) echo "usage: minis-ngrok {start|stop|status|url}"; exit 1 ;;
+esac

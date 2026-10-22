@@ -22,6 +22,11 @@ SCOPE_PUBLIC = "public"
 
 PRIVATE_ONLY = {"iphone_shell", "shell"}
 
+# Tools that drive the paired PC (see tools.PC_TOOLS).  Kept as a literal
+# set here so policy.py does not have to import tools.py (which imports
+# policy's consumer and would create a cycle).
+PC_TOOL_NAMES = {"pc_exec", "pc_procs", "pc_kill", "pc_send", "pc_poll", "pc_status"}
+
 
 def ip_is_private(ip):
     try:
@@ -64,4 +69,7 @@ def tool_allowed(tool_name, scope, private_only_tools=PRIVATE_ONLY, allow_public
     if scope == SCOPE_PUBLIC and tool_name in private_only_tools and not allow_public_shell:
         return False, ("tool %r is restricted to private (device/LAN) clients; "
                        "use the private endpoint or grant access explicitly" % tool_name)
+    if scope == SCOPE_PUBLIC and tool_name in PC_TOOL_NAMES:
+        return False, ("tool %r is restricted to private (device/LAN) clients; "
+                       "the PC channel cannot be reached from the public tunnel" % tool_name)
     return True, None

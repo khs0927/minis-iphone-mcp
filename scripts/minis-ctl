@@ -226,6 +226,28 @@ def main():
         print("=== CONTROL PATH HEALTH ===")
         for name, ok, note in health():
             print("  [%s] %-22s %s" % ("OK" if ok else "--", name, note))
+        print("\n=== PAIRED PC AGENT ===")
+        try:
+            r = subprocess.run(["minis-iphone", "pc_status"], capture_output=True,
+                               text=True, timeout=45)
+            try:
+                import json as _json
+                d = _json.loads(r.stdout)
+            except Exception:
+                d = {}
+            if d.get("alive"):
+                hb = d.get("last_heartbeat") or {}
+                meta = hb.get("meta") or {}
+                if isinstance(meta, str):
+                    meta = _json.loads(meta)
+                print("  [OK] pc-agent   age=%ss host=%s" %
+                      (d.get("heartbeat_age_sec"),
+                       (meta or {}).get("host", "?")))
+                print("       platform  %s" % ((meta or {}).get("platform", "?")))
+            else:
+                print("  [--] pc-agent   not paired (run: minis-ctl pcsetup)")
+        except Exception as e:
+            print("  [--] pc-agent   check failed: %s" % e)
         print("\n=== RUNNING PROGRAMS ===")
         for p in procs():
             if p["cmd"].startswith(("/bin/sh -c", "sh -c", "/bin/sh")):

@@ -24,11 +24,16 @@ BROWSER = os.environ.get("MINIS_BROWSER_CLI", "minis-browser-use")
 
 
 def current_url():
-    try:
-        with open(os.path.join(STATE_DIR, "public-url.txt")) as f:
-            return f.read().strip()
-    except OSError:
-        return ""
+    """Prefer the stable ngrok domain; fall back to the quick tunnel."""
+    for name in ("ngrok-url.txt", "public-url.txt"):
+        try:
+            with open(os.path.join(STATE_DIR, name)) as f:
+                url = f.read().strip()
+            if url:
+                return url
+        except OSError:
+            continue
+    return ""
 
 
 def token():

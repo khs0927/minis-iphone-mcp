@@ -646,6 +646,31 @@ TOOL_SPECS = [
 
 TOOLS = {spec[0]: spec for spec in TOOL_SPECS}
 
+# Tools that drive the paired PC.  They are device/LAN-only: a cloud
+# connector reaching the bridge through the public tunnel must never be able
+# to run commands on the user's computer.
+PC_TOOLS = ("pc_exec", "pc_procs", "pc_kill", "pc_send", "pc_poll", "pc_status")
+
 
 def public_definitions():
-    return [{"name": n, "description": d, "inputSchema": s} for n, d, s, _ in TOOL_SPECS]
+    """Tools advertised to public (tunnel) clients.
+
+    The PC channel is deliberately not advertised: a cloud connector must
+    never be able to run commands on the user's PC, and it must not even be
+    able to see whether one is paired.  `pc_status` is excluded too.
+    """
+    blocked = set(PC_TOOLS) | {"pc_status"}
+    return [{"name": n, "description": d, "inputSchema": s}
+            for n, d, s, _ in TOOL_SPECS if n not in blocked]
+
+
+def scope_definitions(scope):
+    """Tools advertised for a given client scope.
+
+    PUBLIC (port 8901, tunnel) excludes the PC channel outright.
+    PRIVATE (device/LAN) advertises the full tool set.
+    """
+    if scope == "public":
+        return public_definitions()
+    return [{"name": n, "description": d, "inputSchema": s}
+            for n, d, s, _ in TOOL_SPECS]

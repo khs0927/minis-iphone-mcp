@@ -56,12 +56,20 @@ PUBLIC_DOWNLOADS = {"pc-agent.py", "setup-windows.ps1"}
 
 
 def _pc_path_allowed(path):
-    """Paths the stable PC-agent token may touch."""
+    """Paths the stable PC-agent token may touch.
+
+    Note that *reading* /relay/pc (long-poll) is allowed so the agent can
+    fetch its commands; *writing* to /relay/pc is checked separately in
+    do_POST against the request scope.
+    """
     if path in ("/relay/pc", "/relay/pcreply", "/relay/pchb"):
         return True
     if path.startswith("/download/"):
         return path[len("/download/"):] in PUBLIC_DOWNLOADS
     return False
+
+
+PC_COMMAND_WRITABLE_PATHS = {"/relay/pc"}
 
 METRICS = {"requests_total": 0, "tools_calls_total": 0, "tools_errors_total": 0,
            "auth_failures_total": 0, "rate_limited_total": 0,
@@ -181,7 +189,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers",
-                         "Authorization, Content-Type, Mcp-Session-Id, X-Min-Token")
+                         "Authorization, Content-Type, Mcp-Session-Id, X-Min-Token, "
+                         "ngrok-skip-browser-warning")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         for k, v in (headers or {}).items():
             self.send_header(k, v)
@@ -219,7 +228,11 @@ class Handler(BaseHTTPRequestHandler):
             return {"jsonrpc": "2.0", "id": rid, "result": {}}
 
         if method == "tools/list":
-            return {"jsonrpc": "2.0", "id": rid, "result": {"tools": tools.public_definitions()}}
+            scope = self._scope()
+            # Which tools are advertised depends on the client scope: the
+            # public tunnel must not even list the PC channel.
+            defs = tools.scope_definitions(scope)
+            return {"jsonrpc": "2.0", "id": rid, "result": {"tools": defs}}
 
         if method in ("resources/list", "prompts/list"):
             key = "resources" if "resources" in method else "prompts"
@@ -355,7 +368,8 @@ class Handler(BaseHTTPRequestHandler):
         self._log("request", path=p, scope=scope)
 
         if p == "/tools":
-            self._send(200, {"count": len(tools.TOOL_SPECS), "tools": tools.public_definitions()})
+            self._send(200, {"count": len(tools.TOOL_SPECS),
+                             "tools": tools.scope_definitions(self._scope())})
             return
         if p.startswith("/download/"):
             # Downloads are a device/LAN-side convenience (handing an artifact
@@ -468,6 +482,11 @@ class Handler(BaseHTTPRequestHandler):
             box = p[len("/relay/"):]
             if box not in RELAY_BOXES:
                 self._send(404, {"error": "unknown box", "boxes": sorted(RELAY_BOXES)})
+                return
+            # Regardless of which credential was used, a public-scope client
+            # must never be able to inject commands into the PC channel.
+            if box == "pc" and self._scope() != policy.SCOPE_PRIVATE:
+                self._send(403, {"error": "only LAN/device clients may command the PC"})
                 return
             b = self._body()
             default_from, default_to = RELAY_DEFAULTS.get(box, ("minis", "pc"))

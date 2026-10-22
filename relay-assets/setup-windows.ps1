@@ -72,9 +72,11 @@ Say "config saved: $Config"
 
 # --- start ------------------------------------------------------------------
 if (-not $NoStart) {
-  Get-Process -Name python, python3, pythonw -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.CommandLine -like "*pc-agent.py*" } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+  # Kill any previous agent.  Get-Process has no CommandLine property, so
+  # query Win32_Process instead (the old filter silently matched nothing).
+  Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='python3.exe'" |
+    Where-Object { $_.CommandLine -like "*pc-agent.py*" } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
   $log = Join-Path $AgentDir "agent.log"
   Start-Process -FilePath $py -ArgumentList @($AgentPy, "--url", ($urls -join ","), "--token", $Token) `
       -WindowStyle Hidden -RedirectStandardOutput $log -RedirectStandardError (Join-Path $AgentDir "agent.err")

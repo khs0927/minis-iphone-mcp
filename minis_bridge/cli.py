@@ -181,9 +181,12 @@ def cmd_token(args):
 
 
 def cmd_tools(args):
-    for spec in tools.public_definitions():
+    """Tool catalog.  Defaults to the device/LAN (private) view."""
+    role = os.environ.get("MINIS_BRIDGE_ROLE", "private")
+    defs = tools.scope_definitions(role)
+    for spec in defs:
         print("%-26s %s" % (spec["name"], spec["description"].split("\n")[0]))
-    print("\n%d tools" % len(tools.TOOL_SPECS))
+    print("\n%d tools (scope=%s)" % (len(defs), role))
     return 0
 
 

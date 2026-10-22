@@ -59,6 +59,10 @@ case "$1" in
         U=\$(minis-tunnel url 2>/dev/null || true)
       fi
       curl -s --max-time 4 http://127.0.0.1:$PROXY_PORT/v1/models >/dev/null 2>&1 || { cd $REPO_DIR; PROXY_PORT=$PROXY_PORT nohup python3 -m minis_bridge.anthropic_proxy >> $LOG 2>&1 & }
+      # stable-URL tunnel first (ngrok permanent dev domain), cloudflared as fallback
+      if command -v minis-ngrok >/dev/null 2>&1; then
+        minis-ngrok status 2>/dev/null | grep -q 'NGROK UP' || minis-ngrok start >> $LOG 2>&1
+      fi
       if [ \"$SYNC\" = \"1\" ]; then
         P=\$(cat $LASTURL 2>/dev/null || true)
         if [ -n \"\$U\" ] && [ \"\$U\" != \"\$P\" ]; then
