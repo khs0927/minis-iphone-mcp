@@ -344,6 +344,65 @@ def t_claude_inbox(a):
 # --------------------------------------------------------------------------- #
 # paired PC agent (Windows / macOS / Linux) - command channel
 # --------------------------------------------------------------------------- #
+def _pc_wait(cmd_id, timeout, extra=None):
+    """Wait for the PC agent's reply to cmd_id and return the parsed meta."""
+    deadline = time.time() + timeout + 15
+    while time.time() < deadline:
+        res = _STORE.read("pcreply", 0, 0)
+        for it in res.get("items", []):
+            m = it.get("meta") or {}
+            if isinstance(m, str):
+                try:
+                    import json as _json
+                    m = _json.loads(m)
+                except Exception:
+                    m = {}
+            if m.get("reply_to") == cmd_id:
+                if extra:
+                    m.update(extra)
+                return m
+        time.sleep(0.4)
+    return None
+
+
+def t_pc_procs(a):
+    """List every running program on the paired PC (structured)."""
+    if _STORE is None:
+        return {"error": "relay store is not initialised"}
+    item = _STORE.push("pc", "procs", "minis", "pc", {"kind": "procs"})
+    m = _pc_wait(item.get("id"), int(a.get("timeout") or 30))
+    if not m:
+        return {"ok": False, "error": "timeout: no reply from the PC agent"}
+    procs = m.get("procs") or []
+    filt = (a.get("filter") or "").lower()
+    if filt:
+        procs = [p for p in procs
+                 if filt in str(p.get("image", "")).lower()
+                 or filt in str(p.get("comm", "")).lower()
+                 or filt in str(p.get("args", "")).lower()]
+    return {"ok": True, "count": m.get("count", len(procs)),
+            "host": m.get("host"), "platform": m.get("platform"),
+            "processes": procs}
+
+
+def t_pc_kill(a):
+    """Terminate a program on the paired PC by pid."""
+    if _STORE is None:
+        return {"error": "relay store is not initialised"}
+    pid = a.get("pid")
+    if pid is None:
+        return {"error": "pid is required"}
+    item = _STORE.push("pc", "kill %s" % pid, "minis", "pc",
+                       {"kind": "kill", "pid": pid,
+                        "force": bool(a.get("force", True))})
+    m = _pc_wait(item.get("id"), int(a.get("timeout") or 20))
+    if not m:
+        return {"ok": False, "error": "timeout: no reply from the PC agent"}
+    return {"ok": m.get("exit_code") == 0, "pid": pid,
+            "stdout": m.get("stdout", ""), "stderr": m.get("stderr", ""),
+            "exit_code": m.get("exit_code"), "host": m.get("host")}
+
+
 def t_pc_exec(a):
     """Run a command on the paired PC and wait for the result."""
     cmd = (a.get("command") or "").strip()
@@ -568,6 +627,12 @@ TOOL_SPECS = [
      _schema({"command": _s("string", "command line to run on the PC"),
               "timeout": _s("integer", "seconds to wait (default 60)"),
               "shell": _s("string", "auto | cmd | powershell | sh")}, ["command"]), t_pc_exec),
+    ("pc_procs", "List every running program on the paired PC (pid, image, memory).",
+     _schema({"filter": _s("string", "only programs matching this text"),
+              "timeout": _s("integer", "seconds to wait (default 30)")}), t_pc_procs),
+    ("pc_kill", "Terminate a program on the paired PC by pid.",
+     _schema({"pid": _s("integer", "process id to terminate"),
+              "force": _s("boolean", "force kill (default true)")}, ["pid"]), t_pc_kill),
     ("pc_status", "Is the paired PC agent alive? Last heartbeat and pending commands.",
      _schema({}), t_pc_status),
     ("pc_send", "Send a free-form message to the paired PC agent.",

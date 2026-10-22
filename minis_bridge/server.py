@@ -357,16 +357,21 @@ class Handler(BaseHTTPRequestHandler):
                        float(q.get("wait", ["0"])[0]))
             return
         if p == "/mcp":
-            # The MCP spec allows the server to open a server->client SSE
-            # stream on GET.  Some connector clients treat a 405 here as
-            # "transport not implemented", so we open the stream instead -
-            # requests still travel over POST /mcp.
-            self._sse_stream(q, keepalive_only=True)
+            # GET on an MCP endpoint is a *probe* for most clients.  Opening a
+            # long lived SSE stream here makes Anthropic's "is this a valid MCP
+            # server?" check hang (the public tunnel buffers SSE bodies) and the
+            # connector is then reported as "server unreachable".  405 is
+            # spec-legal for this case and is what the check expects.
+            self._send(405, {"error": "use POST for MCP JSON-RPC (streamable http)"})
             return
         if p == "/sse":
-            # Legacy HTTP+SSE transport.  Anthropic's connector falls back to
-            # it (GET /sse -> POST /messages?session_id=...), and a 405 here
-            # aborts the whole connection with 502 CLIENT_HTTP_NOT_IMPLEMENTED.
+            # Legacy HTTP+SSE transport: device/LAN only.  The public tunnel
+            # buffers SSE bodies, so a public client would hang on it - the
+            # streamable-http transport (POST /mcp) is the one for the tunnel.
+            if scope != policy.SCOPE_PRIVATE:
+                self._send(405, {"error": "the legacy SSE transport is only available to "
+                                          "device/LAN clients; use POST /mcp"})
+                return
             self._sse_stream(q, keepalive_only=False)
             return
         self._send(404, {"error": "not found", "path": p})

@@ -148,6 +148,40 @@ def mac_commands():
     return "\n".join(lines)
 
 
+def pc_setup_commands():
+    """Paste-ready PowerShell that installs the PC agent on a Windows PC."""
+    token = ""
+    try:
+        with open(BRIDGE_DIR + "/token") as f:
+            token = f.read().strip()
+    except Exception:
+        pass
+    ip = subprocess.run(["minis-lan-ip"], capture_output=True, text=True).stdout.strip()
+    urls = []
+    if tunnel_url():
+        urls.append(tunnel_url())
+    if ip:
+        urls.append("http://%s:8900" % ip)
+    url_list = ",".join(urls)
+    primary = urls[0] if urls else "<public-url>"
+    return "\n".join([
+        "# Run this in Windows PowerShell (Normal or Administrator).",
+        "# It downloads the agent from the phone bridge, installs it and starts it.",
+        "",
+        '$ErrorActionPreference="Stop"',
+        '$u = "%s"' % primary,
+        '$t = "%s"' % token,
+        '$all = "%s"' % url_list,
+        '$d = Join-Path $env:USERPROFILE ".minis-pc-agent"',
+        'New-Item -ItemType Directory -Force -Path $d | Out-Null',
+        'Invoke-WebRequest -Uri ($u + "/download/setup-windows.ps1") -OutFile (Join-Path $d "setup.ps1") -UseBasicParsing',
+        '& (Join-Path $d "setup.ps1") -Url $all -Token $t -Install',
+        "",
+        "# After that, the Minis app can run commands on this PC:",
+        '#   minis-ctl pc "Get-Process | Select-Object -First 10 Name,Id"',
+    ])
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -191,6 +225,29 @@ def main():
 
     if cmd == "mac":
         print(mac_commands())
+        return 0
+
+    if cmd == "pcsetup":
+        print(pc_setup_commands())
+        return 0
+
+    if cmd == "pc":
+        args = sys.argv[2:]
+        if not args:
+            print("usage: minis-ctl pc \"<command>\"")
+            return 1
+        payload = json.dumps({"command": " ".join(args), "timeout": 90})
+        r = subprocess.run(["minis-iphone", "pc_exec", payload],
+                           capture_output=True, text=True, timeout=180)
+        sys.stdout.write(r.stdout)
+        sys.stderr.write(r.stderr)
+        return 0
+
+    if cmd == "pcprocs":
+        r = subprocess.run(["minis-iphone", "pc_procs", "{}"],
+                           capture_output=True, text=True, timeout=120)
+        sys.stdout.write(r.stdout)
+        sys.stderr.write(r.stderr)
         return 0
 
     if cmd == "cc":

@@ -146,6 +146,49 @@ def decode_out(raw):
     return raw.decode("utf-8", "replace")
 
 
+def collect_procs():
+    """Structured list of the running programs on this machine."""
+    out = []
+    try:
+        if IS_WIN:
+            r = subprocess.run(["tasklist", "/fo", "csv", "/nh"],
+                               capture_output=True, timeout=30)
+            for line in decode_out(r.stdout).splitlines():
+                parts = [p.strip().strip('"') for p in line.split('","')]
+                if len(parts) >= 5 and parts[1].isdigit():
+                    out.append({"image": parts[0], "pid": int(parts[1]),
+                                "session": parts[2], "mem": parts[4]})
+        else:
+            r = subprocess.run(["ps", "-eo", "pid,ppid,stat,comm,args"],
+                               capture_output=True, timeout=30)
+            for line in decode_out(r.stdout).splitlines()[1:]:
+                parts = line.split(None, 4)
+                if len(parts) >= 4 and parts[0].isdigit():
+                    out.append({"pid": int(parts[0]), "ppid": int(parts[1]),
+                                "stat": parts[2], "comm": parts[3],
+                                "args": parts[4] if len(parts) > 4 else ""})
+    except Exception as e:
+        return [{"error": str(e)}]
+    return out
+
+
+def kill_pid(pid, force=True):
+    try:
+        pid = int(pid)
+    except Exception:
+        return ("", "bad pid: %r" % (pid,), 1)
+    if IS_WIN:
+        argv = ["taskkill", "/PID", str(pid)] + (["/F"] if force else [])
+    else:
+        argv = ["kill", "-%s" % ("9" if force else "15"), str(pid)]
+    try:
+        p = subprocess.run(argv, capture_output=True, timeout=20)
+        return (decode_out(p.stdout or b""), decode_out(p.stderr or b""),
+                int(p.returncode))
+    except Exception as e:
+        return ("", "%s: %s" % (type(e).__name__, e), 1)
+
+
 def run_command(cmd, shell="auto", timeout=60):
     """Run cmd on this machine.  Returns (stdout, stderr, exit_code)."""
     if shell in (None, "", "auto"):
@@ -229,6 +272,22 @@ def main():
             if meta.get("kind") == "message":
                 bridge.push_reply("message received: %s" % cmd,
                                   {"reply_to": it.get("id"), "kind": "message"})
+                continue
+            if meta.get("kind") == "procs":
+                procs = collect_procs()
+                bridge.push_reply("%d processes" % len(procs), {
+                    "reply_to": it.get("id"), "kind": "procs",
+                    "procs": procs[:300], "count": len(procs),
+                    "host": socket.gethostname(),
+                    "platform": platform.platform()})
+                continue
+            if meta.get("kind") == "kill":
+                out, err, code = kill_pid(meta.get("pid"),
+                                          bool(meta.get("force", True)))
+                bridge.push_reply(out or err or ("killed %s" % meta.get("pid")), {
+                    "reply_to": it.get("id"), "kind": "kill",
+                    "stdout": out, "stderr": err, "exit_code": code,
+                    "host": socket.gethostname()})
                 continue
             log("exec: %s" % cmd[:160])
             t0 = time.time()
