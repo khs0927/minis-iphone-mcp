@@ -79,6 +79,16 @@ class Handler(BaseHTTPRequestHandler):
         logging_setup.event(LOG, msg, **fields)
 
     # ------------------------------------------------------------------ #
+    def _public_base(self):
+        """Base URL of the current request (used for OAuth metadata links)."""
+        host = (self.headers.get("Host") or "").strip()
+        if not host:
+            host = "127.0.0.1:%d" % CONFIG.port
+        scheme = "https" if not (host.startswith("127.") or host.startswith("localhost")
+                                 or host.startswith("192.168.") or host.startswith("10.")
+                                 or host.startswith("[::1]")) else "http"
+        return "%s://%s" % (scheme, host)
+
     def _scope(self):
         return policy.classify(
             peer_ip=self.client_address[0],
@@ -271,8 +281,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth(q):
             _bump("auth_failures_total")
             self._log("unauthorized", path=p)
+            meta = self._public_base() + "/.well-known/oauth-authorization-server"
             self._send(401, {"error": "unauthorized",
-                             "hint": "Authorization: Bearer <token> (or ?token=...)"})
+                             "hint": "Authorization: Bearer <token> (or ?token=...)"},
+                       headers={"WWW-Authenticate":
+                                'Bearer resource_metadata="%s"' % meta})
             return
 
         scope = self._scope()
@@ -345,7 +358,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth(q):
             _bump("auth_failures_total")
             self._log("unauthorized", path=p)
-            self._send(401, {"error": "unauthorized"})
+            meta = self._public_base() + "/.well-known/oauth-authorization-server"
+            self._send(401, {"error": "unauthorized"},
+                       headers={"WWW-Authenticate":
+                                'Bearer resource_metadata="%s"' % meta})
             return
 
         if rate_limited(self.client_address[0], CONFIG.rate_limit_per_min):

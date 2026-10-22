@@ -69,8 +69,19 @@ def init(config):
         conn.close()
 
 
-def _base_url():
+def _base_url(handler=None):
+    """Issuer URL.
+
+    Prefer the explicit MINIS_BRIDGE_ISSUER, otherwise derive it from the
+    request Host so that the metadata document always describes the address
+    the client actually reached (a loopback issuer breaks remote clients).
+    """
     issuer = _CONFIG.oauth_issuer
+    if not issuer and handler is not None:
+        try:
+            issuer = handler._public_base()
+        except Exception:
+            issuer = ""
     if not issuer:
         issuer = "http://127.0.0.1:%d" % _CONFIG.port
     return issuer.rstrip("/")
@@ -110,7 +121,7 @@ def _mint(client_id, scope):
 
 def handle(handler, path, q):
     if path == "/.well-known/oauth-authorization-server":
-        base = _base_url()
+        base = _base_url(handler)
         return handler._send(200, {
             "issuer": base,
             "authorization_endpoint": base + "/authorize",
