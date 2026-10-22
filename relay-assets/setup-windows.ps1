@@ -1,6 +1,10 @@
 # setup-windows.ps1 — install and start the Minis PC agent on Windows.
 #
-#   powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -Url http://192.168.1.10:8900 -Token mk-xxxx
+#   powershell -ExecutionPolicy Bypass -File setup-windows.ps1 -Url http://192.168.1.10:8900 -Token pc-xxxx
+#
+# The token is the bridge's **PC-agent token** (not the main bridge token):
+# it is stable across connector re-registrations and only unlocks the PC
+# channel, so a leaked PC token cannot reach the phone's tools.
 #
 # What it does:
 #   1. downloads pc-agent.py from the Minis bridge

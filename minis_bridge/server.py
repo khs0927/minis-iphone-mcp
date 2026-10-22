@@ -171,6 +171,7 @@ class Handler(BaseHTTPRequestHandler):
             return {"_raw": raw.decode("utf-8", "replace")[:2000]}
 
     def _send(self, code, body, ctype="application/json", headers=None):
+        self._status = code
         if isinstance(body, (dict, list)):
             body = json.dumps(body, ensure_ascii=False, indent=1).encode("utf-8")
         elif isinstance(body, str):
@@ -308,6 +309,16 @@ class Handler(BaseHTTPRequestHandler):
         self._method_not_allowed()
 
     def do_GET(self):
+        self._status = 0
+        try:
+            self._do_get()
+        finally:
+            if getattr(self, "_status", 0) not in (200, 202, 204):
+                self._log("response", path=urlparse(self.path).path,
+                          status=getattr(self, "_status", 0))
+        return
+
+    def _do_get(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         p = u.path.rstrip("/") or "/"
@@ -405,6 +416,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found", "path": p})
 
     def do_POST(self):
+        self._status = 0
+        try:
+            self._do_post()
+        finally:
+            if getattr(self, "_status", 0) not in (200, 202, 204):
+                self._log("response", path=urlparse(self.path).path,
+                          status=getattr(self, "_status", 0))
+        return
+
+    def _do_post(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         p = u.path.rstrip("/") or "/"
