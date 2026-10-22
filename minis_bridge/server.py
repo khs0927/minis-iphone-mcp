@@ -213,6 +213,40 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self._send(204, b"", "text/plain")
 
+    def do_HEAD(self):
+        """HEAD is used by MCP clients to detect the transport.
+
+        Answering 501 here makes Anthropic's connector report
+        "502 CLIENT_HTTP_NOT_IMPLEMENTED", so we mirror the GET routing
+        without a body.
+        """
+        u = urlparse(self.path)
+        p = u.path.rstrip("/") or "/"
+        if p in ("/health", "/mcp"):
+            self.send_response(200)
+            self.send_header("Content-Type",
+                             "application/json" if p == "/health" else "text/event-stream")
+            self.send_header("X-MCP-Transport", "streamable-http")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _method_not_allowed(self):
+        self._send(405, {"error": "method not allowed",
+                         "allow": "GET, POST, HEAD, OPTIONS"})
+
+    def do_PUT(self):
+        self._method_not_allowed()
+
+    def do_PATCH(self):
+        self._method_not_allowed()
+
+    def do_DELETE(self):
+        self._method_not_allowed()
+
     def do_GET(self):
         u = urlparse(self.path)
         q = parse_qs(u.query)
@@ -283,10 +317,10 @@ class Handler(BaseHTTPRequestHandler):
                                   float(q.get("wait", ["0"])[0]))
             return
         if p == "/mcp":
-            if scope != policy.SCOPE_PRIVATE:
-                self._send(405, {"error": "GET /mcp is not offered on the public endpoint; "
-                                          "use POST /mcp (streamable http)"})
-                return
+            # The MCP spec allows the server to open a server->client SSE
+            # stream on GET.  Some connector clients treat a 405 here as
+            # "transport not implemented", so we open the stream instead -
+            # requests still travel over POST /mcp.
             self._sse_stream(q, keepalive_only=True)
             return
         if p == "/sse":
