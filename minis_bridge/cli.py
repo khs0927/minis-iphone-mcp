@@ -53,30 +53,41 @@ def cmd_start(args):
     env.setdefault("MINIS_BRIDGE_STATE_DIR", CONFIG.state_dir)
     os.makedirs(CONFIG.state_dir, exist_ok=True)
     log = open(os.path.join(CONFIG.state_dir, "bridge-%s.out" % role), "ab")
-    proc = subprocess.Popen([sys.executable, "-m", "minis_bridge.server"],
-                            cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
-    with open(_pid_file(role), "w") as f:
-        f.write(str(proc.pid))
-    for _ in range(30):
-        time.sleep(0.4)
-        if proc.poll() is not None:
-            # The new process died (usually "Address already in use" because an
-            # older instance still holds the port).  Do NOT keep its pid in the
-            # pid file, or `stop` would lose track of the instance that is
-            # really serving the port.
-            print("failed to start (exited); see %s" % os.path.join(CONFIG.state_dir, "bridge-%s.out" % role))
-            return 1
-        try:
-            status, body = _http("http://127.0.0.1:%d/health" % port, timeout=3)
-            up = float(body.get("uptime_sec", 0)) if isinstance(body, dict) else 0
-            if up > 60:
-                print("port %d is already served by an older instance (uptime %.0fs)"
-                      % (port, up))
-                return 1
-            print("started: role=%s port=%d pid=%d" % (role, port, proc.pid))
-            return 0
-        except Exception:
-            continue
+    proc = None
+    for attempt in range(3):
+        proc = subprocess.Popen([sys.executable, "-m", "minis_bridge.server"],
+                                cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
+        with open(_pid_file(role), "w") as f:
+            f.write(str(proc.pid))
+        for _ in range(30):
+            time.sleep(0.4)
+            if proc.poll() is not None:
+                # The new process died (usually "Address already in use" while
+                # the previous instance's socket is still in TIME_WAIT).  Do
+                # NOT keep its pid in the pid file, or `stop` would lose track
+                # of the instance that is really serving the port.
+                break
+            try:
+                status, body = _http("http://127.0.0.1:%d/health" % port, timeout=3)
+                up = float(body.get("uptime_sec", 0)) if isinstance(body, dict) else 0
+                if up > 60:
+                    # An older instance is still serving this port.
+                    proc.terminate()
+                    print("port %d is already served by an older instance (uptime %.0fs)"
+                          % (port, up))
+                    return 1
+                print("started: role=%s port=%d pid=%d" % (role, port, proc.pid))
+                return 0
+            except Exception:
+                continue
+        if proc.poll() is None:
+            proc.terminate()
+        if attempt < 2:
+            time.sleep(3)
+    try:
+        os.remove(_pid_file(role))
+    except OSError:
+        pass
     print("failed to start; see %s" % os.path.join(CONFIG.state_dir, "bridge-%s.out" % role))
     return 1
 
