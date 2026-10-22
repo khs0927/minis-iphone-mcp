@@ -120,13 +120,28 @@ def health():
     return rows
 
 
-def mac_commands():
-    token = ""
+def bridge_token():
+    """Current bearer token.  Falls back to the package config when the
+    token file is momentarily empty (a rotation truncates it for an instant)."""
     try:
         with open(BRIDGE_DIR + "/token") as f:
-            token = f.read().strip()
+            tok = f.read().strip()
+        if tok:
+            return tok
     except Exception:
         pass
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c",
+             "from minis_bridge.config import CONFIG; print(CONFIG.token())"],
+            capture_output=True, text=True, timeout=20, cwd=REPO)
+        return (r.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def mac_commands():
+    token = bridge_token()
     ip = subprocess.run(["minis-lan-ip"], capture_output=True, text=True).stdout.strip()
     url = tunnel_url()
     base = "http://%s:8900" % (ip or "<phone-ip>")
@@ -150,12 +165,7 @@ def mac_commands():
 
 def pc_setup_commands():
     """Paste-ready PowerShell that installs the PC agent on a Windows PC."""
-    token = ""
-    try:
-        with open(BRIDGE_DIR + "/token") as f:
-            token = f.read().strip()
-    except Exception:
-        pass
+    token = bridge_token()
     ip = subprocess.run(["minis-lan-ip"], capture_output=True, text=True).stdout.strip()
     urls = []
     if tunnel_url():
