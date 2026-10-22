@@ -174,7 +174,7 @@ def pc_setup_commands():
         '$all = "%s"' % url_list,
         '$d = Join-Path $env:USERPROFILE ".minis-pc-agent"',
         'New-Item -ItemType Directory -Force -Path $d | Out-Null',
-        'Invoke-WebRequest -Uri ($u + "/download/setup-windows.ps1") -OutFile (Join-Path $d "setup.ps1") -UseBasicParsing',
+        'Invoke-WebRequest -Uri ($u + "/download/setup-windows.ps1") -Headers @{ Authorization = "Bearer $t" } -OutFile (Join-Path $d "setup.ps1") -UseBasicParsing',
         '& (Join-Path $d "setup.ps1") -Url $all -Token $t -Install',
         "",
         "# After that, the Minis app can run commands on this PC:",
