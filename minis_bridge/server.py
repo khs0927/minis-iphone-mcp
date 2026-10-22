@@ -30,7 +30,10 @@ from .config import CONFIG
 from .store import RelayStore
 
 LOG = logging_setup.get("minis_bridge.server")
-SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+# We only implement the modern (streamable-http) transport.  Claiming the
+# legacy 2024-11-05 would make clients pick the SSE transport, which the
+# public tunnel cannot carry.
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18")
 START_TIME = time.time()
 SSE_SESSIONS = {}
 STORE = None
@@ -50,6 +53,15 @@ RELAY_DEFAULTS = {
 # Windows installer.  They contain no secrets, and they are the only way to
 # bootstrap a PC that is not on the same LAN as the phone.
 PUBLIC_DOWNLOADS = {"pc-agent.py", "setup-windows.ps1"}
+
+
+def _pc_path_allowed(path):
+    """Paths the stable PC-agent token may touch."""
+    if path in ("/relay/pc", "/relay/pcreply", "/relay/pchb"):
+        return True
+    if path.startswith("/download/"):
+        return path[len("/download/"):] in PUBLIC_DOWNLOADS
+    return False
 
 METRICS = {"requests_total": 0, "tools_calls_total": 0, "tools_errors_total": 0,
            "auth_failures_total": 0, "rate_limited_total": 0,
@@ -115,18 +127,33 @@ class Handler(BaseHTTPRequestHandler):
             tunnel_suffix=CONFIG.tunnel_suffix)
 
     def _auth(self, q=None):
-        """Bearer token in the header, in ?token= or in X-Min-Token."""
+        """Bearer token in the header, in ?token= or in X-Min-Token.
+
+        Two credentials exist: the main bridge token (rotated whenever the
+        cloud connector is re-registered) and a stable PC-agent token that
+        is only accepted for the PC channel.
+        """
+        self._pc_credential = False
         h = (self.headers.get("Authorization") or "").strip()
         if h.lower().startswith("bearer "):
             cand = h[7:].strip()
             if cand and (cand == CONFIG.token() or oauth.valid_access_token(cand)):
                 return True
+            if cand and cand == CONFIG.pc_token():
+                self._pc_credential = True
+                return True
         alt = (self.headers.get("X-Min-Token") or "").strip()
         if alt and (alt == CONFIG.token() or oauth.valid_access_token(alt)):
+            return True
+        if alt and alt == CONFIG.pc_token():
+            self._pc_credential = True
             return True
         if q:
             cand = (q.get("token", [""])[0] or "").strip()
             if cand and (cand == CONFIG.token() or oauth.valid_access_token(cand)):
+                return True
+            if cand and cand == CONFIG.pc_token():
+                self._pc_credential = True
                 return True
         return False
 
@@ -304,11 +331,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth(q):
             _bump("auth_failures_total")
             self._log("unauthorized", path=p)
-            meta = self._public_base() + "/.well-known/oauth-authorization-server"
             self._send(401, {"error": "unauthorized",
-                             "hint": "Authorization: Bearer <token> (or ?token=...)"},
-                       headers={"WWW-Authenticate":
-                                'Bearer resource_metadata="%s"' % meta})
+                             "hint": "Authorization: Bearer <token> (or ?token=...)"})
+            return
+
+        if getattr(self, "_pc_credential", False) and not _pc_path_allowed(p):
+            self._send(403, {"error": "the PC token is limited to the PC channel"})
             return
 
         scope = self._scope()
@@ -389,10 +417,11 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth(q):
             _bump("auth_failures_total")
             self._log("unauthorized", path=p)
-            meta = self._public_base() + "/.well-known/oauth-authorization-server"
-            self._send(401, {"error": "unauthorized"},
-                       headers={"WWW-Authenticate":
-                                'Bearer resource_metadata="%s"' % meta})
+            self._send(401, {"error": "unauthorized"})
+            return
+
+        if getattr(self, "_pc_credential", False) and not _pc_path_allowed(p):
+            self._send(403, {"error": "the PC token is limited to the PC channel"})
             return
 
         if rate_limited(self.client_address[0], CONFIG.rate_limit_per_min):

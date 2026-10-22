@@ -140,6 +140,25 @@ def bridge_token():
         return ""
 
 
+def bridge_pc_token():
+    """Stable PC-agent token (never rotated with the main bridge token)."""
+    try:
+        with open(BRIDGE_DIR + "/pc-token") as f:
+            tok = f.read().strip()
+        if tok:
+            return tok
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c",
+             "from minis_bridge.config import CONFIG; print(CONFIG.pc_token())"],
+            capture_output=True, text=True, timeout=20, cwd=REPO)
+        return (r.stdout or "").strip()
+    except Exception:
+        return ""
+
+
 def mac_commands():
     token = bridge_token()
     ip = subprocess.run(["minis-lan-ip"], capture_output=True, text=True).stdout.strip()
@@ -164,8 +183,13 @@ def mac_commands():
 
 
 def pc_setup_commands():
-    """Paste-ready PowerShell that installs the PC agent on a Windows PC."""
-    token = bridge_token()
+    """Paste-ready PowerShell that installs the PC agent on a Windows PC.
+
+    Uses the dedicated PC token, not the main bridge token: the main one is
+    rotated whenever the cloud connector is re-registered, which would kill
+    the agent on the PC.  The PC token only unlocks the PC channel.
+    """
+    token = bridge_pc_token()
     ip = subprocess.run(["minis-lan-ip"], capture_output=True, text=True).stdout.strip()
     urls = []
     if tunnel_url():
