@@ -1,0 +1,47 @@
+#!/bin/sh
+# Keepalive for the Minis iPhone MCP bridge (v2).
+#
+# iOS suspends apps: the server and the tunnel die with the app.  This loop
+# brings them back within ~20 seconds instead of waiting for a scheduled task.
+#
+#   minis-keepalive start|stop|status
+set -e
+STATE_DIR=${MINIS_BRIDGE_STATE_DIR:-/var/minis/shared/claude-bridge}
+PIDF=$STATE_DIR/keepalive.pid
+LOG=$STATE_DIR/keepalive.log
+BRIDGE_PORT=${MINIS_BRIDGE_PORT:-8900}
+PUBLIC_PORT=${MINIS_BRIDGE_PUBLIC_PORT:-8901}
+ORIGIN=${MINIS_BRIDGE_TUNNEL_ORIGIN:-http://127.0.0.1:$PUBLIC_PORT}
+
+alive() {
+  for p in /proc/[0-9]*; do
+    c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+    case "$c" in *minis-keepalive*) return 0;; esac
+  done
+  return 1
+}
+
+case "$1" in
+  start)
+    if alive; then echo "keepalive already running"; exit 0; fi
+    cd "$STATE_DIR" 2>/dev/null || cd /tmp
+    nohup sh -c "while true; do
+      minis-bridge status >/dev/null 2>&1 || { minis-bridge start --role private >> $LOG 2>&1; minis-bridge start --role public >> $LOG 2>&1; }
+      minis-tunnel status 2>/dev/null | grep -q SUPERVISOR_UP || MINIS_BRIDGE_TUNNEL_ORIGIN=$ORIGIN minis-tunnel start >> $LOG 2>&1
+      sleep 20
+    done" >> "$LOG" 2>&1 &
+    echo $! > $PIDF
+    echo "keepalive started (pid $(cat $PIDF))" ;;
+  stop)
+    for p in /proc/[0-9]*; do
+      c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+      case "$c" in *minis-keepalive*) kill "${p#/proc/}" 2>/dev/null;; esac
+    done
+    rm -f $PIDF
+    echo "keepalive stopped" ;;
+  status)
+    alive && echo "KEEPALIVE UP" || echo "KEEPALIVE DOWN"
+    minis-bridge status
+    minis-tunnel status 2>/dev/null | head -2 ;;
+  *) echo "usage: minis-keepalive {start|stop|status}"; exit 1 ;;
+esac

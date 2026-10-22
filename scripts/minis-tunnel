@@ -1,0 +1,68 @@
+#!/bin/sh
+# Public tunnel manager for the Minis iPhone MCP bridge.
+#
+#   minis-tunnel start|stop|restart|status|url|config
+#
+# The tunnel points at the PUBLIC role of the bridge (default port 8901),
+# which is the port that does NOT expose the shell tool.
+set -e
+STATE_DIR=${MINIS_BRIDGE_STATE_DIR:-/var/minis/shared/claude-bridge}
+DIR=$STATE_DIR
+LOG=$DIR/tunnel.log
+URLF=$DIR/public-url.txt
+ORIGIN=${MINIS_BRIDGE_TUNNEL_ORIGIN:-http://127.0.0.1:8901}
+CLOUDFLARED=${CLOUDFLARED:-/usr/local/bin/cloudflared}
+
+alive() {
+  for p in /proc/[0-9]*; do
+    c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+    case "$c" in *tunnel_supervisor.py*) return 0;; esac
+  done
+  return 1
+}
+
+kill_cf() {
+  for p in /proc/[0-9]*; do
+    c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+    case "$c" in *cloudflared*tunnel*) kill "${p#/proc/}" 2>/dev/null;; esac
+  done
+}
+
+newest_url() { rg -o 'https://[a-z0-9-]+\.trycloudflare\.com' $LOG 2>/dev/null | tail -1; }
+
+case "$1" in
+  start)
+    if alive; then echo "already running: $(newest_url)"; exit 0; fi
+    cd $DIR
+    TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    MINIS_BRIDGE_TUNNEL_ORIGIN=$ORIGIN nohup python3 $DIR/tunnel_supervisor.py >> $DIR/tunnel-supervisor.out 2>&1 &
+    echo $! > $DIR/tunnel.pid
+    i=0
+    while [ $i -lt 60 ]; do
+      sleep 1
+      U=$(newest_url)
+      REG=$(rg -o '2026-[0-9T:-]+Z INF Registered tunnel connection' $LOG 2>/dev/null | tail -1 | cut -d' ' -f1)
+      if [ -n "$U" ] && [ -n "$REG" ] && [ "$REG" \> "$TS" ]; then
+        echo "started: $U"; exit 0
+      fi
+      i=$((i+1))
+    done
+    echo "timeout; see $LOG"; exit 1 ;;
+  stop)
+    for p in /proc/[0-9]*; do
+      c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+      case "$c" in *tunnel_supervisor.py*) kill "${p#/proc/}" 2>/dev/null;; esac
+    done
+    sleep 1
+    kill_cf
+    rm -f $DIR/tunnel.pid
+    echo "stopped" ;;
+  restart) "$0" stop; sleep 2; "$0" start ;;
+  status)
+    alive && echo "SUPERVISOR UP" || echo "SUPERVISOR DOWN"
+    echo "URL: $(newest_url)"
+    tail -2 $LOG 2>/dev/null ;;
+  url) newest_url ;;
+  config) cat $DIR/mcp-config.json 2>/dev/null ;;
+  *) echo "usage: minis-tunnel {start|stop|restart|status|url|config}"; exit 1 ;;
+esac
