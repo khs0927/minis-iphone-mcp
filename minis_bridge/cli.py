@@ -59,8 +59,20 @@ def cmd_start(args):
         f.write(str(proc.pid))
     for _ in range(30):
         time.sleep(0.4)
+        if proc.poll() is not None:
+            # The new process died (usually "Address already in use" because an
+            # older instance still holds the port).  Do NOT keep its pid in the
+            # pid file, or `stop` would lose track of the instance that is
+            # really serving the port.
+            print("failed to start (exited); see %s" % os.path.join(CONFIG.state_dir, "bridge-%s.out" % role))
+            return 1
         try:
-            _http("http://127.0.0.1:%d/health" % port, timeout=3)
+            status, body = _http("http://127.0.0.1:%d/health" % port, timeout=3)
+            up = float(body.get("uptime_sec", 0)) if isinstance(body, dict) else 0
+            if up > 60:
+                print("port %d is already served by an older instance (uptime %.0fs)"
+                      % (port, up))
+                return 1
             print("started: role=%s port=%d pid=%d" % (role, port, proc.pid))
             return 0
         except Exception:
@@ -88,6 +100,24 @@ def cmd_stop(args):
             os.remove(pf)
         except OSError:
             pass
+    # The pid file can go stale (a failed start overwrites it), so also sweep
+    # for any bridge server that is still alive.  Without this, an orphaned
+    # instance keeps the port and every later start silently fails.
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % d, "rb") as f:
+                c = f.read().decode("utf-8", "replace").replace("\x00", " ")
+        except OSError:
+            continue
+        if "minis_bridge.server" in c:
+            try:
+                os.kill(int(d), signal.SIGTERM)
+                stopped.append("orphan %s" % d)
+            except OSError:
+                pass
+    time.sleep(1.0)
     print("stopped: %s" % (", ".join(stopped) or "nothing running"))
     return 0
 
