@@ -341,6 +341,79 @@ def t_claude_inbox(a):
     return _STORE.read("inbox", a.get("since", 0), 0)
 
 
+# --------------------------------------------------------------------------- #
+# paired PC agent (Windows / macOS / Linux) - command channel
+# --------------------------------------------------------------------------- #
+def t_pc_exec(a):
+    """Run a command on the paired PC and wait for the result."""
+    cmd = (a.get("command") or "").strip()
+    if not cmd:
+        return {"error": "command is required"}
+    timeout = int(a.get("timeout") or 60)
+    shell = a.get("shell") or "auto"
+    if _STORE is None:
+        return {"error": "relay store is not initialised"}
+    meta = {"kind": "exec", "command": cmd, "shell": shell, "timeout": timeout}
+    item = _STORE.push("pc", cmd, "minis", "pc", meta)
+    cmd_id = item.get("id")
+    deadline = time.time() + timeout + 15
+    while time.time() < deadline:
+        res = _STORE.read("pcreply", 0, 0)
+        for it in res.get("items", []):
+            m = it.get("meta") or {}
+            if isinstance(m, str):
+                try:
+                    import json as _json
+                    m = _json.loads(m)
+                except Exception:
+                    m = {}
+            if m.get("reply_to") == cmd_id:
+                return {"id": cmd_id, "ok": True, "stdout": m.get("stdout", ""),
+                        "stderr": m.get("stderr", ""), "exit_code": m.get("exit_code"),
+                        "ms": m.get("ms"), "host": m.get("host"),
+                        "platform": m.get("platform")}
+        time.sleep(0.4)
+    return {"id": cmd_id, "ok": False,
+            "error": "timeout: the PC agent did not answer within %ds" % (timeout + 15),
+            "hint": "run pc_status to check whether the agent is alive"}
+
+
+def t_pc_status(a):
+    """Heartbeat and pending-command state of the paired PC agent."""
+    if _STORE is None:
+        return {"error": "relay store is not initialised"}
+    hb = _STORE.read("pchb", 0, 0)
+    items = hb.get("items", [])
+    last = items[-1] if items else None
+    age = None
+    if last:
+        try:
+            age = round(time.time() - float(last.get("ts", 0)), 1)
+        except Exception:
+            age = None
+    pending = _STORE.read("pc", 0, 0)
+    return {"alive": bool(last) and (age is None or age < 90),
+            "last_heartbeat": last, "heartbeat_age_sec": age,
+            "pending_commands": len(pending.get("items", []))}
+
+
+def t_pc_send(a):
+    """Send a free-form message to the paired PC agent."""
+    text = a.get("prompt") or a.get("text") or ""
+    if not text:
+        return {"error": "prompt is required"}
+    if _STORE is None:
+        return {"error": "relay store is not initialised"}
+    return _STORE.push("pc", text, "minis", "pc", {"kind": "message"})
+
+
+def t_pc_poll(a):
+    """Read replies from the paired PC agent."""
+    if _STORE is None:
+        return {"error": "relay store is not initialised"}
+    return _STORE.read("pcreply", a.get("since", 0), a.get("wait", 0))
+
+
 def t_bridge_info(a):
     import socket
     ip = "?"
@@ -490,6 +563,18 @@ TOOL_SPECS = [
               "wait": _s("number", "seconds to wait")}), t_claude_poll),
     ("claude_inbox", "Inspect the relay queue in both directions.",
      _schema({"since": _s("number", "cursor")}), t_claude_inbox),
+
+    ("pc_exec", "Run a shell/PowerShell command on the paired PC (Windows/macOS/Linux) and wait for the result.",
+     _schema({"command": _s("string", "command line to run on the PC"),
+              "timeout": _s("integer", "seconds to wait (default 60)"),
+              "shell": _s("string", "auto | cmd | powershell | sh")}, ["command"]), t_pc_exec),
+    ("pc_status", "Is the paired PC agent alive? Last heartbeat and pending commands.",
+     _schema({}), t_pc_status),
+    ("pc_send", "Send a free-form message to the paired PC agent.",
+     _schema({"prompt": _s("string", "message")}, ["prompt"]), t_pc_send),
+    ("pc_poll", "Read replies from the paired PC agent. wait=N blocks up to N seconds.",
+     _schema({"since": _s("number", "cursor"),
+              "wait": _s("number", "seconds to wait")}), t_pc_poll),
     ("bridge_info", "Connection details: role, MCP URL, tool count, native tools.",
      _schema({}), t_bridge_info),
 ]

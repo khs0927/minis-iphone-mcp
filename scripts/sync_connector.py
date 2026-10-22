@@ -12,6 +12,7 @@ Usage:
 """
 import argparse
 import json
+import re
 import os
 import subprocess
 import sys
@@ -54,10 +55,25 @@ def browser(action, **kwargs):
 
 
 def js(script):
+    """Run JS in the in-app WebView and return the *result string*.
+
+    minis-browser-use answers with
+        {"action": "execute_js", "data": {"result": "...", "page_url": "..."}}
+    so the value has to be unwrapped - otherwise every comparison sees the
+    whole JSON envelope and nothing ever matches.
+    """
     res = browser("execute_js", script=script)
-    text = json.dumps(res, ensure_ascii=False)
-    # the tool returns {"result": "..."} or {"_raw": ...}
-    return text
+    if isinstance(res, dict):
+        data = res.get("data")
+        if isinstance(data, dict):
+            for key in ("text", "result", "value"):
+                val = data.get(key)
+                if isinstance(val, str):
+                    # the tool appends "\n  tab_id: N" to the result
+                    return re.sub(r"\s*tab_id:\s*\d+\s*$", "", val).strip()
+        if isinstance(res.get("result"), str):
+            return res["result"]
+    return json.dumps(res, ensure_ascii=False)
 
 
 def wait(seconds):
@@ -197,8 +213,31 @@ def main():
     return 'not found';
     """)
     wait(2)
-    print("connector re-registered with %s" % base)
-    return 0
+    # verify: open the connector again and read the URL back
+    browser("navigate", url="https://claude.ai/customize/connectors")
+    wait(4)
+    js("""
+    const w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+    let n; while(n=w.nextNode()){ if((n.textContent||'').trim()==='내 항목'){ n.parentElement.click(); return 'ok'; } }
+    return 'no';
+    """)
+    wait(3)
+    js("""
+    const els=[...document.querySelectorAll('*')].filter(e=>e.children.length===0&&(e.textContent||'').trim()==='미니스 브리지');
+    if(els.length){ els[0].parentElement.click(); return 'opened'; }
+    return 'not found';
+    """)
+    wait(3)
+    check = js("""
+    const m=document.body.innerText.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com[^\s]*/);
+    return m ? m[0] : 'none';
+    """)
+    print("connector url now : %s" % check[:120])
+    if base in check:
+        print("OK - connector points at the current tunnel")
+        return 0
+    print("!! connector still does not point at the current tunnel")
+    return 1
 
 
 if __name__ == "__main__":

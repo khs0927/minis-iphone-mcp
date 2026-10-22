@@ -4,21 +4,26 @@
 # iOS suspends apps: the server and the tunnel die with the app.  This loop
 # brings them back within ~20 seconds instead of waiting for a scheduled task.
 #
+# The tunnel is health checked with a real HTTP request - the supervisor
+# process can be alive while cloudflared itself is dead (then every request
+# fails with 530), and only a live probe detects that.
+#
+# It also re-registers the claude.ai connector when the quick tunnel hands
+# out a new hostname (a new name means the URL inside claude.ai is stale).
+#
 #   minis-keepalive start|stop|status
 set -e
 STATE_DIR=${MINIS_BRIDGE_STATE_DIR:-/var/minis/shared/claude-bridge}
 PIDF=$STATE_DIR/keepalive.pid
 LOG=$STATE_DIR/keepalive.log
-BRIDGE_PORT=${MINIS_BRIDGE_PORT:-8900}
 PUBLIC_PORT=${MINIS_BRIDGE_PUBLIC_PORT:-8901}
 ORIGIN=${MINIS_BRIDGE_TUNNEL_ORIGIN:-http://127.0.0.1:$PUBLIC_PORT}
 PROXY_PORT=${MINIS_BRIDGE_PROXY_PORT:-8788}
 REPO_DIR=${MINIS_BRIDGE_REPO_DIR:-/root/minis-iphone-mcp}
+SYNC=${MINIS_BRIDGE_SYNC_CONNECTOR:-1}
 MARK=MINIS_KEEPALIVE_LOOP
+LASTURL=$STATE_DIR/.keepalive_url
 
-# The loop body carries a unique marker.  Matching on the script name would
-# also match this script's own invocation, which made "start" think it was
-# already running and made "stop" kill itself.
 loop_pids() {
   for p in /proc/[0-9]*; do
     [ -r "$p/cmdline" ] || continue
@@ -29,9 +34,7 @@ loop_pids() {
   done
 }
 
-alive() {
-  [ -n "$(loop_pids)" ]
-}
+alive() { [ -n "$(loop_pids)" ]; }
 
 case "$1" in
   start)
@@ -39,8 +42,21 @@ case "$1" in
     cd "$STATE_DIR" 2>/dev/null || cd /tmp
     nohup sh -c "while true; do
       minis-bridge status >/dev/null 2>&1 || { minis-bridge start --role private >> $LOG 2>&1; minis-bridge start --role public >> $LOG 2>&1; }
-      minis-tunnel status 2>/dev/null | grep -q SUPERVISOR_UP || MINIS_BRIDGE_TUNNEL_ORIGIN=$ORIGIN minis-tunnel start >> $LOG 2>&1
+      TOK=\$(cat $STATE_DIR/token 2>/dev/null || true)
+      U=\$(minis-tunnel url 2>/dev/null || true)
+      if [ -z \"\$U\" ] || ! curl -s --max-time 12 \"\$U/health?token=\$TOK\" 2>/dev/null | grep -q '\"ok\"'; then
+        MINIS_BRIDGE_TUNNEL_ORIGIN=$ORIGIN minis-tunnel restart >> $LOG 2>&1
+        U=\$(minis-tunnel url 2>/dev/null || true)
+      fi
       curl -s --max-time 4 http://127.0.0.1:$PROXY_PORT/v1/models >/dev/null 2>&1 || { cd $REPO_DIR; PROXY_PORT=$PROXY_PORT nohup python3 -m minis_bridge.anthropic_proxy >> $LOG 2>&1 & }
+      if [ \"$SYNC\" = \"1\" ]; then
+        P=\$(cat $LASTURL 2>/dev/null || true)
+        if [ -n \"\$U\" ] && [ \"\$U\" != \"\$P\" ]; then
+          echo \"\$U\" > $LASTURL
+          cd $REPO_DIR && timeout 280 python3 -u scripts/sync_connector.py >> $LOG 2>&1
+          echo \"connector re-registered for \$U\" >> $LOG
+        fi
+      fi
       sleep 20
     done
     # $MARK" >> "$LOG" 2>&1 &
@@ -56,6 +72,8 @@ case "$1" in
     if alive; then echo "KEEPALIVE UP (pid $(loop_pids | tr '\n' ' '))"; else echo "KEEPALIVE DOWN"; fi
     minis-bridge status
     minis-tunnel status 2>/dev/null | head -2
-    printf 'proxy  : '; curl -s --max-time 4 -o /dev/null -w "HTTP %{http_code}\n" "http://127.0.0.1:$PROXY_PORT/v1/models" ;;
+    printf 'proxy  : '; curl -s --max-time 4 -o /dev/null -w "HTTP %{http_code}\n" "http://127.0.0.1:$PROXY_PORT/v1/models"
+    U=$(minis-tunnel url 2>/dev/null); T=$(cat $STATE_DIR/token 2>/dev/null)
+    printf 'public : '; curl -s --max-time 12 -o /dev/null -w "HTTP %{http_code}\n" "$U/health?token=$T" ;;
   *) echo "usage: minis-keepalive {start|stop|status}"; exit 1 ;;
 esac

@@ -31,7 +31,7 @@ class Config:
         self.rate_limit_per_min = _int("MINIS_BRIDGE_RATE_LIMIT", 240)
         self.max_tool_output = _int("MINIS_BRIDGE_MAX_OUTPUT", 60000)
         self.tool_timeout = _int("MINIS_BRIDGE_TOOL_TIMEOUT", 90)
-        self.protocol_version = os.environ.get("MINIS_BRIDGE_PROTOCOL", "2025-06-18")
+        self.protocol_version = os.environ.get("MINIS_BRIDGE_PROTOCOL", "2025-11-25")
         self.server_name = "minis-iphone-bridge"
         self.public_hosts = {
             h.strip().lower() for h in os.environ.get("MINIS_BRIDGE_PUBLIC_HOSTS", "").split(",")

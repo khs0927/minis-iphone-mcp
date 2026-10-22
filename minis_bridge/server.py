@@ -30,9 +30,26 @@ from .config import CONFIG
 from .store import RelayStore
 
 LOG = logging_setup.get("minis_bridge.server")
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 START_TIME = time.time()
 SSE_SESSIONS = {}
 STORE = None
+
+# Relay boxes.  "inbox"/"outbox" are the original Minis<->Claude agent
+# channel; "pc"/"pcreply"/"pchb" are the command channel to a paired PC
+# agent (Windows/macOS/Linux) that executes commands on that machine.
+RELAY_BOXES = {"inbox", "outbox", "pc", "pcreply", "pchb"}
+RELAY_DEFAULTS = {
+    "inbox": ("minis", "claude"),
+    "outbox": ("claude", "minis"),
+    "pc": ("minis", "pc"),
+    "pcreply": ("pc", "minis"),
+    "pchb": ("pc", "minis"),
+}
+# Files that may be fetched through the public tunnel: the PC agent and its
+# Windows installer.  They contain no secrets, and they are the only way to
+# bootstrap a PC that is not on the same LAN as the phone.
+PUBLIC_DOWNLOADS = {"pc-agent.py", "setup-windows.ps1"}
 
 METRICS = {"requests_total": 0, "tools_calls_total": 0, "tools_errors_total": 0,
            "auth_failures_total": 0, "rate_limited_total": 0,
@@ -155,9 +172,15 @@ class Handler(BaseHTTPRequestHandler):
 
         if method == "initialize":
             from . import __version__
+            # MCP spec: if we support the version the client asked for, we must
+            # answer with exactly that version - a mismatch is rejected by
+            # strict clients (surfaced as 502 CLIENT_HTTP_NOT_IMPLEMENTED).
+            requested = (params or {}).get("protocolVersion")
+            version = requested if requested in SUPPORTED_PROTOCOL_VERSIONS \
+                else CONFIG.protocol_version
             return {"jsonrpc": "2.0", "id": rid, "result": {
-                "protocolVersion": CONFIG.protocol_version,
-                "capabilities": {"tools": {"listChanged": False}, "logging": {}},
+                "protocolVersion": version,
+                "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": CONFIG.server_name, "version": __version__},
                 "instructions": ("Controls a real iPhone (iOS frameworks) and the Minis app. "
                                  "Use iphone_help for native tool syntax, minis_sessions_* to "
@@ -299,11 +322,14 @@ class Handler(BaseHTTPRequestHandler):
             # Downloads are a device/LAN-side convenience (handing an artifact
             # to the in-app WebView).  The state directory also holds the
             # bearer token and the relay database, so this route must never be
-            # reachable from the public tunnel.
-            if scope != policy.SCOPE_PRIVATE:
+            # reachable from the public tunnel - except for the PC agent
+            # bootstrap files, which contain no secrets and are the only way
+            # to set up a PC that is not on the same LAN.
+            name = p[len("/download/"):]
+            if scope != policy.SCOPE_PRIVATE and name not in PUBLIC_DOWNLOADS:
                 self._send(403, {"error": "downloads are restricted to LAN/device clients"})
                 return
-            serve_download(self, p[len("/download/"):])
+            serve_download(self, name)
             return
         if p == "/tools/help":
             try:
@@ -322,12 +348,13 @@ class Handler(BaseHTTPRequestHandler):
         if p.startswith("/sessions/") and p.endswith("/status"):
             self._send(200, minis_sessions.status(p.split("/")[2]))
             return
-        if p == "/relay/inbox":
-            self._send(200, STORE.read("inbox", q.get("since", ["0"])[0]))
-            return
-        if p == "/relay/outbox":
-            self._send(200, STORE.read("outbox", q.get("since", ["0"])[0]),
-                                  float(q.get("wait", ["0"])[0]))
+        if p.startswith("/relay/"):
+            box = p[len("/relay/"):]
+            if box not in RELAY_BOXES:
+                self._send(404, {"error": "unknown box", "boxes": sorted(RELAY_BOXES)})
+                return
+            self._send(200, STORE.read(box, q.get("since", ["0"])[0]),
+                       float(q.get("wait", ["0"])[0]))
             return
         if p == "/mcp":
             # The MCP spec allows the server to open a server->client SSE
@@ -337,10 +364,9 @@ class Handler(BaseHTTPRequestHandler):
             self._sse_stream(q, keepalive_only=True)
             return
         if p == "/sse":
-            if scope != policy.SCOPE_PRIVATE:
-                self._send(405, {"error": "the legacy SSE transport is only available to "
-                                          "device/LAN clients; use POST /mcp"})
-                return
+            # Legacy HTTP+SSE transport.  Anthropic's connector falls back to
+            # it (GET /sse -> POST /messages?session_id=...), and a 405 here
+            # aborts the whole connection with 502 CLIENT_HTTP_NOT_IMPLEMENTED.
             self._sse_stream(q, keepalive_only=False)
             return
         self._send(404, {"error": "not found", "path": p})
@@ -383,13 +409,19 @@ class Handler(BaseHTTPRequestHandler):
                 SSE_SESSIONS[sid].put(res)
             self._send(202, b"", "application/json")
             return
-        if p == "/relay/inbox":
+        if p.startswith("/relay/"):
+            box = p[len("/relay/"):]
+            if box not in RELAY_BOXES:
+                self._send(404, {"error": "unknown box", "boxes": sorted(RELAY_BOXES)})
+                return
             b = self._body()
-            self._send(200, STORE.push("inbox", b.get("text", ""), "minis", "claude"))
-            return
-        if p == "/relay/outbox":
-            b = self._body()
-            self._send(200, STORE.push("outbox", b.get("text", ""), "claude", "minis"))
+            default_from, default_to = RELAY_DEFAULTS.get(box, ("minis", "pc"))
+            meta = b.get("meta")
+            if meta is None and b.get("reply_to"):
+                meta = {"reply_to": b.get("reply_to")}
+            self._send(200, STORE.push(box, b.get("text", ""),
+                                       b.get("from") or default_from,
+                                       b.get("to") or default_to, meta))
             return
         if p == "/iphone":
             b = self._body()
