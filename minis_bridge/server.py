@@ -249,6 +249,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"count": len(tools.TOOL_SPECS), "tools": tools.public_definitions()})
             return
         if p.startswith("/download/"):
+            # Downloads are a device/LAN-side convenience (handing an artifact
+            # to the in-app WebView).  The state directory also holds the
+            # bearer token and the relay database, so this route must never be
+            # reachable from the public tunnel.
+            if scope != policy.SCOPE_PRIVATE:
+                self._send(403, {"error": "downloads are restricted to LAN/device clients"})
+                return
             serve_download(self, p[len("/download/"):])
             return
         if p == "/tools/help":
