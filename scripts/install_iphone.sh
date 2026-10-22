@@ -43,6 +43,29 @@ print("token:", CONFIG.token())
 EOF
 fi
 
+# --- helper CLIs -------------------------------------------------------------
+# These live in scripts/ and are the operator-facing control plane:
+#   minis-iphone  fastest MCP client (direct tool calls, no CLI startup cost)
+#   minis-ctl     unified control plane (health / ps / start / stop / cc / sh)
+#   minis-lan-ip  prints this device's current LAN IP (DHCP lease changes)
+#   minis-killproc kills by EXACT cmdline (substring matching kills the
+#                 keepalive loop, whose command line mentions every service)
+for tool in minis-keepalive minis-tunnel minis-iphone minis-ctl minis-lan-ip minis-killproc; do
+  if [ -f "$REPO_DIR/scripts/$tool" ]; then
+    cat "$REPO_DIR/scripts/$tool" > "$BIN_DIR/$tool"
+    chmod +x "$BIN_DIR/$tool"
+  fi
+done
+if [ -f "$REPO_DIR/scripts/tunnel_supervisor.py" ]; then
+  cat "$REPO_DIR/scripts/tunnel_supervisor.py" > "$STATE_DIR/tunnel_supervisor.py"
+fi
+# relay helpers the Mac can fetch over HTTP (see /download in the server)
+if [ -d "$REPO_DIR/relay-assets" ]; then
+  for asset in "$REPO_DIR/relay-assets"/*; do
+    [ -f "$asset" ] && cat "$asset" > "$STATE_DIR/$(basename "$asset")"
+  done
+fi
+
 # --- start -------------------------------------------------------------------
 if [ "$1" != "--no-start" ]; then
   minis-bridge start --role private

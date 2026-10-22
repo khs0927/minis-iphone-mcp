@@ -12,36 +12,50 @@ LOG=$STATE_DIR/keepalive.log
 BRIDGE_PORT=${MINIS_BRIDGE_PORT:-8900}
 PUBLIC_PORT=${MINIS_BRIDGE_PUBLIC_PORT:-8901}
 ORIGIN=${MINIS_BRIDGE_TUNNEL_ORIGIN:-http://127.0.0.1:$PUBLIC_PORT}
+PROXY_PORT=${MINIS_BRIDGE_PROXY_PORT:-8788}
+REPO_DIR=${MINIS_BRIDGE_REPO_DIR:-/root/minis-iphone-mcp}
+MARK=MINIS_KEEPALIVE_LOOP
+
+# The loop body carries a unique marker.  Matching on the script name would
+# also match this script's own invocation, which made "start" think it was
+# already running and made "stop" kill itself.
+loop_pids() {
+  for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
+    case "$c" in
+      *"$MARK"*) echo "${p#/proc/}" ;;
+    esac
+  done
+}
 
 alive() {
-  for p in /proc/[0-9]*; do
-    c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
-    case "$c" in *minis-keepalive*) return 0;; esac
-  done
-  return 1
+  [ -n "$(loop_pids)" ]
 }
 
 case "$1" in
   start)
-    if alive; then echo "keepalive already running"; exit 0; fi
+    if alive; then echo "keepalive already running (pid $(loop_pids | tr '\n' ' '))"; exit 0; fi
     cd "$STATE_DIR" 2>/dev/null || cd /tmp
     nohup sh -c "while true; do
       minis-bridge status >/dev/null 2>&1 || { minis-bridge start --role private >> $LOG 2>&1; minis-bridge start --role public >> $LOG 2>&1; }
       minis-tunnel status 2>/dev/null | grep -q SUPERVISOR_UP || MINIS_BRIDGE_TUNNEL_ORIGIN=$ORIGIN minis-tunnel start >> $LOG 2>&1
+      curl -s --max-time 4 http://127.0.0.1:$PROXY_PORT/v1/models >/dev/null 2>&1 || { cd $REPO_DIR; PROXY_PORT=$PROXY_PORT nohup python3 -m minis_bridge.anthropic_proxy >> $LOG 2>&1 & }
       sleep 20
-    done" >> "$LOG" 2>&1 &
+    done
+    # $MARK" >> "$LOG" 2>&1 &
     echo $! > $PIDF
+    sleep 1
     echo "keepalive started (pid $(cat $PIDF))" ;;
   stop)
-    for p in /proc/[0-9]*; do
-      c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
-      case "$c" in *minis-keepalive*) kill "${p#/proc/}" 2>/dev/null;; esac
-    done
+    for pid in $(loop_pids); do kill "$pid" 2>/dev/null; done
     rm -f $PIDF
+    sleep 1
     echo "keepalive stopped" ;;
   status)
-    alive && echo "KEEPALIVE UP" || echo "KEEPALIVE DOWN"
+    if alive; then echo "KEEPALIVE UP (pid $(loop_pids | tr '\n' ' '))"; else echo "KEEPALIVE DOWN"; fi
     minis-bridge status
-    minis-tunnel status 2>/dev/null | head -2 ;;
+    minis-tunnel status 2>/dev/null | head -2
+    printf 'proxy  : '; curl -s --max-time 4 -o /dev/null -w "HTTP %{http_code}\n" "http://127.0.0.1:$PROXY_PORT/v1/models" ;;
   *) echo "usage: minis-keepalive {start|stop|status}"; exit 1 ;;
 esac

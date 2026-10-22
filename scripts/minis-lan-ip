@@ -1,0 +1,26 @@
+#!/bin/sh
+# minis-lan-ip — print this device's current LAN IP.
+# The phone's DHCP lease changes (192.168.123.115 -> 192.168.219.44 seen on
+# 2026-10-22), so anything that hardcoded the old address silently broke.
+# Same UDP-connect trick the bridge server itself uses.
+python3 - <<'PY'
+import socket
+ip = ""
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(1.5)
+    s.connect(("8.8.8.8", 80))
+    ip = s.getsockname()[0]
+    s.close()
+except Exception:
+    pass
+if not ip:
+    try:
+        import re
+        txt = open("/var/minis/shared/claude-bridge/server.out", errors="replace").read()
+        m = re.findall(r"listening on http://([0-9.]+):", txt)
+        ip = m[-1] if m else ""
+    except Exception:
+        ip = ""
+print(ip or "127.0.0.1")
+PY

@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""minis-ctl — unified control plane for the iPhone / Minis bridge.
+
+One entry point to inspect and steer every long-running process on this
+device, plus the agentic and direct command channels.
+
+  minis-ctl status              health of every control path + running programs
+  minis-ctl ps                  running programs only
+  minis-ctl start|stop|restart <svc>
+                                 svc: bridge proxy tunnel keepalive
+  minis-ctl cc "<prompt>"       agentic control via local Claude Code
+                                 (Bash + 29 MCP tools, ~12s)
+  minis-ctl sh "<cmd>"          MCP shell round-trip (~0.5s)
+  minis-ctl raw "<cmd>"         direct local shell (fastest, ~5ms)
+  minis-ctl mac                 paste-ready commands for the Mac (Claude Code)
+
+The bridge runs two roles:
+  private :8900  LAN/device scope, full tool set (incl. iphone_shell)
+  public  :8901  tunnel scope, shell tool refused — this is what cloudflared
+                  points at, so a public connector can never reach the shell.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+
+BRIDGE_DIR = "/var/minis/shared/claude-bridge"
+PRIVATE_URL = "http://127.0.0.1:8900"
+PUBLIC_URL = "http://127.0.0.1:8901"
+REPO = "/root/minis-iphone-mcp"
+
+SERVICES = {
+    "bridge": (
+        "minis_bridge.server",
+        ["sh", "-c", "minis-bridge start --role private; minis-bridge start --role public"],
+        ["minis-bridge", "stop"],
+    ),
+    "proxy": (
+        "anthropic_proxy",
+        ["sh", "-c",
+         "cd %s && PROXY_PORT=8788 nohup python3 -m minis_bridge.anthropic_proxy "
+         ">> %s/proxy.out 2>&1 &" % (REPO, BRIDGE_DIR)],
+        ["minis-killproc", "--match", "anthropic_proxy"],
+    ),
+    "tunnel": (
+        "tunnel_supervisor",
+        ["minis-tunnel", "start"],
+        ["minis-tunnel", "stop"],
+    ),
+    "keepalive": (
+        "minis-keepalive",
+        ["minis-keepalive", "start"],
+        ["minis-keepalive", "stop"],
+    ),
+}
+
+
+def procs():
+    out = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open("/proc/%s/cmdline" % d, "rb") as f:
+                cmd = f.read().decode("utf-8", "replace").replace("\x00", " ").strip()
+            with open("/proc/%s/stat" % d) as f:
+                parts = f.read().rsplit(") ", 1)[-1].split()
+                state, ppid = parts[0], int(parts[1])
+        except Exception:
+            continue
+        if cmd:
+            out.append({"pid": int(d), "ppid": ppid, "state": state, "cmd": cmd})
+    return sorted(out, key=lambda x: x["pid"])
+
+
+def find(token):
+    return [p for p in procs() if token in p["cmd"]]
+
+
+def http_ok(url, timeout=4):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def keepalive_alive():
+    try:
+        with open(BRIDGE_DIR + "/keepalive.pid") as f:
+            pid = int(f.read().strip())
+        return os.path.isdir("/proc/%d" % pid)
+    except Exception:
+        return False
+
+
+def tunnel_url():
+    try:
+        with open(BRIDGE_DIR + "/public-url.txt") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def health():
+    rows = [
+        ("bridge private 8900", http_ok(PRIVATE_URL + "/health"), "LAN scope, full tools"),
+        ("bridge public  8901", http_ok(PUBLIC_URL + "/health"), "tunnel scope, no shell"),
+    ]
+    rows.append(("proxy (8788)", http_ok("http://127.0.0.1:8788/v1/models"),
+                 "claude-phone backend"))
+    cf = find("cloudflared tunnel")
+    rows.append(("tunnel (public)", bool(cf), tunnel_url() or "(no url)"))
+    rows.append(("keepalive", keepalive_alive(), "20s recovery loop"))
+    rows.append(("claude-code", http_ok("http://127.0.0.1:8788/v1/models")
+                 and os.path.exists("/usr/local/bin/claude-phone"),
+                 "local agent (Bash + MCP)"))
+    return rows
+
+
+def mac_commands():
+    token = ""
+    try:
+        with open(BRIDGE_DIR + "/token") as f:
+            token = f.read().strip()
+    except Exception:
+        pass
+    ip = subprocess.run(["minis-lan-ip"], capture_output=True, text=True).stdout.strip()
+    url = tunnel_url()
+    base = "http://%s:8900" % (ip or "<phone-ip>")
+    lines = [
+        "# Run on the Mac (same Wi-Fi as this iPhone).",
+        "# 1) fetch the relay helper",
+        "curl -s http://%s/download/claude-relay.py \\" % base,
+        "  -H 'Authorization: Bearer %s' -o ~/claude-relay.py" % token,
+        "",
+        "# 2) run the relay (Minis <-> Claude Code on the Mac)",
+        "python3 ~/claude-relay.py --url %s --token %s" % (base, token),
+        "",
+        "# Optional: stable public tunnel (survives the phone suspending)",
+        "curl -s http://%s/download/mac-tunnel.sh \\" % base,
+        "  -H 'Authorization: Bearer %s' -o ~/mac-tunnel.sh && sh ~/mac-tunnel.sh" % token,
+    ]
+    if url:
+        lines += ["", "# Already-running public connector URL:", "#   %s/mcp?token=%s" % (url, token)]
+    return "\n".join(lines)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        return 1
+    cmd = sys.argv[1]
+
+    if cmd == "status":
+        print("=== CONTROL PATH HEALTH ===")
+        for name, ok, note in health():
+            print("  [%s] %-22s %s" % ("OK" if ok else "--", name, note))
+        print("\n=== RUNNING PROGRAMS ===")
+        for p in procs():
+            if p["cmd"].startswith(("/bin/sh -c", "sh -c", "/bin/sh")):
+                continue
+            print("  pid=%-6s ppid=%-6s %s" % (p["pid"], p["ppid"], p["cmd"][:104]))
+        return 0
+
+    if cmd == "ps":
+        for p in procs():
+            print("pid=%-6s ppid=%-6s %s" % (p["pid"], p["ppid"], p["cmd"][:120]))
+        return 0
+
+    if cmd in ("start", "stop", "restart"):
+        if len(sys.argv) < 3:
+            print("usage: minis-ctl %s <%s>" % (cmd, "|".join(SERVICES)))
+            return 1
+        svc = sys.argv[2]
+        if svc not in SERVICES:
+            print("unknown service %r; known: %s" % (svc, ", ".join(SERVICES)))
+            return 1
+        token, start_cmd, stop_cmd = SERVICES[svc]
+        if cmd in ("stop", "restart"):
+            subprocess.run(stop_cmd, capture_output=True, text=True)
+            print("%s: stopped" % svc)
+            time.sleep(1.5)
+        if cmd in ("start", "restart"):
+            r = subprocess.run(start_cmd, capture_output=True, text=True)
+            print("%s: started (%s)" % (svc, (r.stdout or r.stderr).strip()[:160]))
+            time.sleep(1.5)
+        return 0
+
+    if cmd == "mac":
+        print(mac_commands())
+        return 0
+
+    if cmd == "cc":
+        prompt = sys.argv[2] if len(sys.argv) > 2 else ""
+        out = subprocess.run(
+            ["claude-phone", "-p", prompt, "--output-format", "stream-json",
+             "--verbose", "--dangerously-skip-permissions"],
+            capture_output=True, text=True, timeout=900,
+            cwd=os.path.expanduser("~/claude-work"))
+        texts = []
+        for l in out.stdout.splitlines():
+            if not l.strip():
+                continue
+            try:
+                j = json.loads(l)
+            except Exception:
+                continue
+            if j.get("type") == "assistant":
+                for c in (j.get("message") or {}).get("content", []):
+                    if c.get("type") == "text" and c.get("text", "").strip():
+                        texts.append(c["text"])
+                    elif c.get("type") == "tool_use":
+                        texts.append("[tool:%s %s]" % (
+                            c.get("name"),
+                            json.dumps(c.get("input"), ensure_ascii=False)[:300]))
+            elif j.get("type") == "result" and j.get("subtype") != "success":
+                texts.append("[ERROR] %s" % str(j.get("result", ""))[:400])
+        print("\n".join(texts) or out.stdout[-1500:] or out.stderr[-800:])
+        return 0
+
+    if cmd in ("sh", "raw"):
+        args = sys.argv[2:] or [""]
+        if cmd == "sh":
+            r = subprocess.run(["minis-iphone", "shell"] + args,
+                               capture_output=True, text=True, timeout=180)
+        else:
+            r = subprocess.run(["/bin/sh", "-c", " ".join(args)],
+                               capture_output=True, text=True, timeout=180)
+        sys.stdout.write(r.stdout)
+        sys.stderr.write(r.stderr)
+        return r.returncode
+
+    print("unknown command %r" % cmd)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

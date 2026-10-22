@@ -1,0 +1,26 @@
+#!/bin/sh
+# minis-killproc — kill processes by EXACT full cmdline match.
+# Partial matching is dangerous here: the keepalive loop's command line
+# mentions every service it supervises, so a substring match on
+# "anthropic_proxy.py" would kill the supervisor itself.
+# usage: minis-killproc "<exact cmdline>" | minis-killproc --match <substring>
+EXACT="$1"
+SUB=""
+[ "$1" = "--match" ] && { SUB="$2"; EXACT=""; }
+n=0
+for p in /proc/[0-9]*; do
+  [ -r "$p/cmdline" ] || continue
+  c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | sed 's/ *$//')
+  [ -z "$c" ] && continue
+  hit=0
+  if [ -n "$EXACT" ]; then
+    [ "$c" = "$EXACT" ] && hit=1
+  else
+    case "$c" in *"$SUB"*) hit=1;; esac
+  fi
+  if [ "$hit" = "1" ]; then
+    kill "${p#/proc/}" 2>/dev/null && { echo "killed ${p#/proc/}: $c"; n=$((n+1)); }
+  fi
+done
+[ "$n" = "0" ] && echo "no match for: ${EXACT:-$SUB}"
+exit 0

@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import apple, logging_setup, minis_sessions, oauth, policy, tools
+from .download import serve_download
 from .config import CONFIG
 from .store import RelayStore
 
@@ -260,6 +261,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if p == "/tools":
             self._send(200, {"count": len(tools.TOOL_SPECS), "tools": tools.public_definitions()})
+            return
+        if p.startswith("/download/"):
+            serve_download(self, p[len("/download/"):])
             return
         if p == "/tools/help":
             try:

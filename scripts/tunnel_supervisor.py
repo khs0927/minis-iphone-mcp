@@ -23,7 +23,7 @@ URLF = os.path.join(DIR, "public-url.txt")
 CFGF = os.path.join(DIR, "mcp-config.json")
 CFG_SSE = os.path.join(DIR, "mcp-config-sse.json")
 CF = "/usr/local/bin/cloudflared"
-ORIGIN = "http://127.0.0.1:8900"
+ORIGIN = os.environ.get("MINIS_BRIDGE_TUNNEL_ORIGIN", "http://127.0.0.1:8901")
 URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
 
