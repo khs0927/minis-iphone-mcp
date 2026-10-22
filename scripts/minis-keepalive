@@ -16,6 +16,7 @@ set -e
 STATE_DIR=${MINIS_BRIDGE_STATE_DIR:-/var/minis/shared/claude-bridge}
 PIDF=$STATE_DIR/keepalive.pid
 LOG=$STATE_DIR/keepalive.log
+BRIDGE_PORT=${MINIS_BRIDGE_PORT:-8900}
 PUBLIC_PORT=${MINIS_BRIDGE_PUBLIC_PORT:-8901}
 ORIGIN=${MINIS_BRIDGE_TUNNEL_ORIGIN:-http://127.0.0.1:$PUBLIC_PORT}
 PROXY_PORT=${MINIS_BRIDGE_PROXY_PORT:-8788}
@@ -41,10 +42,19 @@ case "$1" in
     if alive; then echo "keepalive already running (pid $(loop_pids | tr '\n' ' '))"; exit 0; fi
     cd "$STATE_DIR" 2>/dev/null || cd /tmp
     nohup sh -c "while true; do
-      minis-bridge status >/dev/null 2>&1 || { minis-bridge start --role private >> $LOG 2>&1; minis-bridge start --role public >> $LOG 2>&1; }
+      curl -s --max-time 6 http://127.0.0.1:$BRIDGE_PORT/health 2>/dev/null | grep -q '\"ok\"' || minis-bridge start --role private >> $LOG 2>&1
+      curl -s --max-time 6 http://127.0.0.1:$PUBLIC_PORT/health 2>/dev/null | grep -q '\"ok\"' || minis-bridge start --role public >> $LOG 2>&1
       TOK=\$(cat $STATE_DIR/token 2>/dev/null || true)
       U=\$(minis-tunnel url 2>/dev/null || true)
-      if [ -z \"\$U\" ] || ! curl -s --max-time 12 \"\$U/health?token=\$TOK\" 2>/dev/null | grep -q '\"ok\"'; then
+      # 1) is the ORIGIN alive?  A dead origin makes the tunnel answer 530 and
+      #    would look like a dead tunnel - restarting cloudflared then only
+      #    churns the hostname (and breaks the connector URL) for nothing.
+      ORIGIN_OK=0
+      if curl -s --max-time 6 \"http://127.0.0.1:$PUBLIC_PORT/health\" 2>/dev/null | grep -q '\"ok\"'; then
+        ORIGIN_OK=1
+      fi
+      # 2) origin fine but the public URL broken -> the tunnel really is dead
+      if [ \"\$ORIGIN_OK\" = \"1\" ] && { [ -z \"\$U\" ] || ! curl -s --max-time 12 \"\$U/health?token=\$TOK\" 2>/dev/null | grep -q '\"ok\"'; }; then
         MINIS_BRIDGE_TUNNEL_ORIGIN=$ORIGIN minis-tunnel restart >> $LOG 2>&1
         U=\$(minis-tunnel url 2>/dev/null || true)
       fi
