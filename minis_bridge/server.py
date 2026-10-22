@@ -245,20 +245,6 @@ class Handler(BaseHTTPRequestHandler):
         _bump("scope_public_total" if scope == policy.SCOPE_PUBLIC else "scope_private_total")
         self._log("request", path=p, scope=scope)
 
-        if p.startswith("/download/"):
-            # Lets the Mac fetch the relay/bootstrap helpers with one curl,
-            # instead of the user having to copy files off the phone by hand.
-            name = p.split("/download/", 1)[1]
-            allowed = {"claude-relay.py", "mac-tunnel.sh"}
-            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            fp = os.path.join(base, "relay-assets", name)
-            if name not in allowed or not os.path.isfile(fp):
-                self._send(404, {"error": "not found", "allowed": sorted(allowed)})
-                return
-            with open(fp, "rb") as f:
-                data = f.read()
-            self._send(200, data, ctype="text/plain; charset=utf-8")
-            return
         if p == "/tools":
             self._send(200, {"count": len(tools.TOOL_SPECS), "tools": tools.public_definitions()})
             return
