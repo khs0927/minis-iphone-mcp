@@ -1,0 +1,240 @@
+name: rea-remote
+
+# Remote reverse-engineering engine for the iPhone/iSH host.
+#
+# Why: this phone sandbox cannot run JVM-class RE tooling (x86/aarch64 iSH kernel
+# lacks getcpu(2) -> HotSpot aborts; the local glibc is older than 2.35; ~3 GB
+# free disk) and has ~150 MB free RAM. GitHub-hosted ubuntu-latest runners are
+# free for public repos, so the heavy lifting happens here instead.
+#
+# Trigger (API):
+#   POST /repos/{owner}/{repo}/actions/workflows/rea-remote.yml/dispatches
+#   {"ref":"main","inputs":{"task":"radare2-info","target_url":"https://..."}}
+# Trigger (gh, when a working gh exists):
+#   gh workflow run rea-remote.yml -f task=radare2-info -f target_url=https://...
+# Phone helper: /usr/local/bin/rea-remote <task> <url-or-path>
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "https URL of the artifact to fetch and analyze"
+        required: true
+        type: string
+      task:
+        description: "Analysis to run"
+        required: true
+        type: choice
+        options:
+          - radare2-info
+          - ghidra-headless
+          - jadx-decompile
+          - apktool-decode
+
+run-name: "rea-remote ${{ inputs.task }} #${{ github.run_number }}"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TASK: ${{ inputs.task }}
+      TARGET_URL: ${{ inputs.target_url }}
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            radare2-info|ghidra-headless|jadx-decompile|apktool-decode) ;;
+            *) echo "::error::unsupported task '$TASK'"; exit 1 ;;
+          esac
+          case "$TARGET_URL" in
+            https://*) ;;
+            *) echo "::error::target_url must be an https URL"; exit 1 ;;
+          esac
+
+      - name: Fetch target artifact
+        run: |
+          set -euo pipefail
+          mkdir -p work/in work/out
+          name=$(basename "${TARGET_URL%%\?*}")
+          [ -n "$name" ] || name=target.bin
+          ARTIFACT="$PWD/work/in/$name"
+          curl -fsSL --retry 3 --max-time 600 -o "$ARTIFACT" "$TARGET_URL"
+          test -s "$ARTIFACT"
+          echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
+          sha256sum "$ARTIFACT" | tee work/out/sha256.txt
+          ls -l "$ARTIFACT"
+          file "$ARTIFACT" | tee work/out/file-type.txt
+
+      - name: Resolve tool versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          api() { curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json' "$1"; }
+          ghidra_url=$(api https://api.github.com/repos/NationalSecurityAgency/ghidra/releases/latest \
+            | jq -r '.assets[].browser_download_url | select(endswith(".zip"))' | head -1)
+          jadx_url=$(api https://api.github.com/repos/skylot/jadx/releases/latest \
+            | jq -r '.assets[].browser_download_url | select(test("/jadx-[0-9][0-9.]*.zip$"))' | head -1)
+          test -n "$ghidra_url" && test -n "$jadx_url"
+          {
+            echo "GHIDRA_URL=$ghidra_url"
+            echo "GHIDRA_VER=$(basename "$ghidra_url" .zip)"
+            echo "JADX_URL=$jadx_url"
+            echo "JADX_VER=$(basename "$jadx_url" .zip)"
+          } | tee -a "$GITHUB_ENV"
+
+      - name: Cache tool release zips
+        if: env.TASK == 'ghidra-headless' || env.TASK == 'jadx-decompile'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/rea-tools
+          key: rea-tools-${{ env.GHIDRA_VER }}-${{ env.JADX_VER }}
+
+      - name: Set up JDK 21
+        if: env.TASK == 'ghidra-headless' || env.TASK == 'apktool-decode' || env.TASK == 'jadx-decompile'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install radare2 / apktool (apt)
+        if: env.TASK == 'radare2-info' || env.TASK == 'apktool-decode'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          if [ "$TASK" = radare2-info ]; then sudo apt-get install -y -qq radare2; r2 -v | head -2; fi
+          if [ "$TASK" = apktool-decode ]; then sudo apt-get install -y -qq apktool; apktool --version; fi
+
+      - name: Install Ghidra (cached)
+        if: env.TASK == 'ghidra-headless'
+        run: |
+          set -euo pipefail
+          CACHE="$RUNNER_TEMP/rea-tools"
+          mkdir -p "$CACHE"
+          zip="$CACHE/$GHIDRA_VER.zip"
+          [ -s "$zip" ] || curl -fsSL --retry 3 --max-time 1200 -o "$zip" "$GHIDRA_URL"
+          if [ ! -x "$CACHE/ghidra/support/analyzeHeadless" ]; then
+            rm -rf "$CACHE/ghidra"; mkdir -p "$CACHE/ghidra"
+            unzip -q -o "$zip" -d "$CACHE/ghidra"
+          fi
+          HOME_DIR=$(dirname "$(dirname "$(find "$CACHE/ghidra" -maxdepth 3 -name analyzeHeadless | head -1)")")
+          echo "GHIDRA_HOME=$HOME_DIR" >> "$GITHUB_ENV"
+          echo "ghidra version: $(sed -n 's/^application.version=//p' "$HOME_DIR/Ghidra/application.properties")"
+          test -x "$HOME_DIR/support/analyzeHeadless"
+
+      - name: Install JADX (cached)
+        if: env.TASK == 'jadx-decompile'
+        run: |
+          set -euo pipefail
+          CACHE="$RUNNER_TEMP/rea-tools"
+          mkdir -p "$CACHE"
+          zip="$CACHE/$JADX_VER.zip"
+          [ -s "$zip" ] || curl -fsSL --retry 3 --max-time 600 -o "$zip" "$JADX_URL"
+          [ -x "$CACHE/jadx/bin/jadx" ] || unzip -q -o "$zip" -d "$CACHE/jadx"
+          echo "$CACHE/jadx/bin" >> "$GITHUB_PATH"
+          "$CACHE/jadx/bin/jadx" --version
+
+      # ---------------- analysis ----------------
+
+      - name: "Analyze: radare2-info"
+        if: env.TASK == 'radare2-info'
+        timeout-minutes: 8
+        run: |
+          set -euo pipefail
+          r2 -N -q -c 'ij'   "$ARTIFACT" > /tmp/r2-info.json
+          r2 -N -q -c 'iSj'  "$ARTIFACT" > /tmp/r2-sections.json
+          r2 -N -q -c 'iij'  "$ARTIFACT" > /tmp/r2-imports.json
+          r2 -N -q -c 'iSSj' "$ARTIFACT" > /tmp/r2-symbols.json
+          jq -n --slurpfile info /tmp/r2-info.json --slurpfile sections /tmp/r2-sections.json \
+                --slurpfile imports /tmp/r2-imports.json --slurpfile symbols /tmp/r2-symbols.json \
+                '{info: $info[0], sections: $sections[0], imports: $imports[0], symbols: $symbols[0]}' \
+                > work/out/r2-info.json
+          r2 -N -q -c 'iI;iS;ii;izq' "$ARTIFACT" > work/out/r2-summary.txt
+          wc -l work/out/r2-info.json
+
+      - name: "Analyze: ghidra-headless"
+        if: env.TASK == 'ghidra-headless'
+        timeout-minutes: 22
+        run: |
+          set -euo pipefail
+          export GHIDRA_OUT="$PWD/work/out/ghidra-summary.json"
+          mkdir -p /tmp/ghproj
+          "$GHIDRA_HOME/support/analyzeHeadless" /tmp/ghproj rea \
+            -import "$ARTIFACT" \
+            -scriptPath "$GITHUB_WORKSPACE/.github/ghidra-scripts" \
+            -postScript DumpSummary.py \
+            -analysisTimeoutPerFile 900 \
+            -deleteProject 2>&1 | tee work/out/ghidra-log.txt
+          test -s "$GHIDRA_OUT"
+          jq '{program, language, image_base, function_count, external_symbols: (.external_symbols|length), memory_blocks}' "$GHIDRA_OUT"
+
+      - name: "Analyze: jadx-decompile"
+        if: env.TASK == 'jadx-decompile'
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          mkdir -p work/out/jadx-src
+          jadx --no-res --no-debug-info -d work/out/jadx-src "$ARTIFACT" > work/out/jadx-log.txt 2>&1 || true
+          ( cd work/out/jadx-src && find . -name '*.java' | sort ) > work/out/jadx-filelist.txt
+          # pack the decompiled tree into one file so the artifact is easy to read on the phone
+          tar -czf work/out/jadx-src.tar.gz -C work/out/jadx-src .
+          echo "java files: $(wc -l < work/out/jadx-filelist.txt)"
+          tail -5 work/out/jadx-log.txt
+
+      - name: "Analyze: apktool-decode"
+        if: env.TASK == 'apktool-decode'
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          mkdir -p work/out/apktool
+          apktool d -f -o work/out/apktool "$ARTIFACT" > work/out/apktool-log.txt 2>&1 || true
+          ( cd work/out/apktool && find . -type f | sort ) > work/out/apktool-filelist.txt
+          tar -czf work/out/apktool-decoded.tar.gz -C work/out/apktool .
+          echo "decoded files: $(wc -l < work/out/apktool-filelist.txt)"
+          tail -5 work/out/apktool-log.txt
+
+      - name: Write metadata + job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg task "$TASK" \
+            --arg target_url "$TARGET_URL" \
+            --arg sha256 "$(cut -d' ' -f1 work/out/sha256.txt 2>/dev/null || echo unknown)" \
+            --arg artifact "$(basename "$ARTIFACT" 2>/dev/null || echo unknown)" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg runner "$(uname -srm) / $(nproc) cpu / $(free -m | sed -n 2p | tr -s ' ' | cut -d' ' -f2) MB" \
+            --arg ghidra "$GHIDRA_VER" --arg jadx "$JADX_VER" \
+            '{task:$task, target_url:$target_url, sha256:$sha256, artifact:$artifact,
+              run_id:$run_id, run_url:$run_url, runner:$runner,
+              tool_versions:{ghidra:$ghidra, jadx:$jadx}}' > work/out/metadata.json
+          cat work/out/metadata.json
+          {
+            echo "### rea-remote :: \`$TASK\`"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| target | $TARGET_URL |"
+            echo "| sha256 | $(cut -d' ' -f1 work/out/sha256.txt 2>/dev/null) |"
+            echo "| runner | $(uname -srm) |"
+            echo "| run | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID |"
+            echo
+            echo '```'
+            ls -l work/out | head -20
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rea-${{ inputs.task }}-${{ github.run_id }}
+          path: work/out/
+          retention-days: 14
+          if-no-files-found: warn
