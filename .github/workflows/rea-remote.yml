@@ -160,6 +160,15 @@ jobs:
           r2 -N -q -c 'iI;iS;ii;izq' "$ARTIFACT" > work/out/r2-summary.txt
           wc -l work/out/r2-info.json
 
+      - name: Debug workspace layout (ghidra)
+        if: env.TASK == 'ghidra-headless'
+        run: |
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          ls -la "$GITHUB_WORKSPACE"
+          ls -la "$GITHUB_WORKSPACE/.github" 2>/dev/null || echo "no .github dir"
+          ls -la "$GITHUB_WORKSPACE/.github/ghidra-scripts" 2>/dev/null || echo "no ghidra-scripts dir"
+          find "$GITHUB_WORKSPACE" -name 'DumpSummary*' 2>/dev/null || echo "no DumpSummary found"
+
       - name: "Analyze: ghidra-headless"
         if: env.TASK == 'ghidra-headless'
         timeout-minutes: 22
