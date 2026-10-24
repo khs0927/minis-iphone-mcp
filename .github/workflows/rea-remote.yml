@@ -171,7 +171,7 @@ jobs:
           mkdir -p /tmp/ghproj
           "$GHIDRA_HOME/support/analyzeHeadless" /tmp/ghproj rea \
             -import "$ARTIFACT" \
-            -scriptPath "$GITHUB_WORKSPACE/.github/workflows/ghidra-scripts" \
+            -scriptPath "$GITHUB_WORKSPACE/.github/workflows" \
             -postScript DumpSummary \
             -analysisTimeoutPerFile 900 \
             -deleteProject 2>&1 | tee work/out/ghidra-log.txt
