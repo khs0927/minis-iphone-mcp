@@ -131,6 +131,11 @@ jobs:
           echo "GHIDRA_HOME=$HOME_DIR" >> "$GITHUB_ENV"
           echo "ghidra version: $(sed -n 's/^application.version=//p' "$HOME_DIR/Ghidra/application.properties")"
           test -x "$HOME_DIR/support/analyzeHeadless"
+          # Stage our post-script into a built-in Ghidra script dir so
+          # -postScript finds it without relying on -scriptPath discovery.
+          mkdir -p "$HOME_DIR/Ghidra/Features/Base/ghidra_scripts"
+          cp "$GITHUB_WORKSPACE/.github/workflows/DumpSummary.py" \
+             "$HOME_DIR/Ghidra/Features/Base/ghidra_scripts/DumpSummary.py"
 
       - name: Install JADX (cached)
         if: env.TASK == 'jadx-decompile'
@@ -171,7 +176,6 @@ jobs:
           mkdir -p /tmp/ghproj
           "$GHIDRA_HOME/support/analyzeHeadless" /tmp/ghproj rea \
             -import "$ARTIFACT" \
-            -scriptPath "$GITHUB_WORKSPACE/.github/workflows" \
             -postScript DumpSummary \
             -analysisTimeoutPerFile 900 \
             -deleteProject 2>&1 | tee work/out/ghidra-log.txt
