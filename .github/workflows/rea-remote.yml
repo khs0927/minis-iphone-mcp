@@ -134,8 +134,8 @@ jobs:
           # Stage our post-script into a built-in Ghidra script dir so
           # -postScript finds it without relying on -scriptPath discovery.
           mkdir -p "$HOME_DIR/Ghidra/Features/Base/ghidra_scripts"
-          cp "$GITHUB_WORKSPACE/.github/workflows/DumpSummary.py" \
-             "$HOME_DIR/Ghidra/Features/Base/ghidra_scripts/DumpSummary.py"
+          cp "$GITHUB_WORKSPACE/.github/workflows/Probe.py" \
+             "$HOME_DIR/Ghidra/Features/Base/ghidra_scripts/Probe.py"
 
       - name: Install JADX (cached)
         if: env.TASK == 'jadx-decompile'
@@ -174,11 +174,11 @@ jobs:
           set -euo pipefail
           export GHIDRA_OUT="$PWD/work/out/ghidra-summary.json"
           mkdir -p /tmp/ghproj
-          ls -la "$GHIDRA_HOME/Ghidra/Features/Base/ghidra_scripts/DumpSummary.py" || echo "NOT IN BASE DIR"
+          ls -la "$GHIDRA_HOME/Ghidra/Features/Base/ghidra_scripts/Probe.py" || echo "NOT IN BASE DIR"
           "$GHIDRA_HOME/support/analyzeHeadless" /tmp/ghproj rea \
             -import "$ARTIFACT" \
             -scriptPath "$GHIDRA_HOME/Ghidra/Features/Base/ghidra_scripts" \
-            -postScript DumpSummary \
+            -postScript Probe \
             -analysisTimeoutPerFile 900 \
             -deleteProject 2>&1 | tee work/out/ghidra-log.txt
           test -s "$GHIDRA_OUT"
