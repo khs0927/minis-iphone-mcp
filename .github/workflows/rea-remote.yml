@@ -56,6 +56,9 @@ jobs:
             *) echo "::error::target_url must be an https URL"; exit 1 ;;
           esac
 
+      - name: Checkout repo (ghidra post-script lives here)
+        uses: actions/checkout@v4
+
       - name: Fetch target artifact
         run: |
           set -euo pipefail
