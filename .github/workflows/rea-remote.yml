@@ -174,8 +174,10 @@ jobs:
           set -euo pipefail
           export GHIDRA_OUT="$PWD/work/out/ghidra-summary.json"
           mkdir -p /tmp/ghproj
+          ls -la "$GHIDRA_HOME/Ghidra/Features/Base/ghidra_scripts/DumpSummary.py" || echo "NOT IN BASE DIR"
           "$GHIDRA_HOME/support/analyzeHeadless" /tmp/ghproj rea \
             -import "$ARTIFACT" \
+            -scriptPath "$GHIDRA_HOME/Ghidra/Features/Base/ghidra_scripts" \
             -postScript DumpSummary \
             -analysisTimeoutPerFile 900 \
             -deleteProject 2>&1 | tee work/out/ghidra-log.txt
