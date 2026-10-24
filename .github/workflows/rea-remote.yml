@@ -170,7 +170,7 @@ jobs:
           "$GHIDRA_HOME/support/analyzeHeadless" /tmp/ghproj rea \
             -import "$ARTIFACT" \
             -scriptPath "$GITHUB_WORKSPACE/.github/ghidra-scripts" \
-            -postScript DumpSummary.py \
+            -postScript DumpSummary \
             -analysisTimeoutPerFile 900 \
             -deleteProject 2>&1 | tee work/out/ghidra-log.txt
           test -s "$GHIDRA_OUT"
