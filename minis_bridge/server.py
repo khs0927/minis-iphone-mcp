@@ -227,10 +227,19 @@ class Handler(BaseHTTPRequestHandler):
                 "protocolVersion": version,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": CONFIG.server_name, "version": __version__},
-                "instructions": ("Controls a real iPhone (iOS frameworks) and the Minis app. "
-                                 "Use iphone_help for native tool syntax, minis_sessions_* to "
-                                 "read/write Minis conversations, claude_send/claude_poll to "
-                                 "exchange messages with a Claude agent.")}}
+                "instructions": ("DEFAULT TOOL POLICY: This bridge controls the user's real "
+                                 "iPhone and the Minis app on it. Whenever the user's message is about "
+                                 "the phone itself - battery, device status, alarms, reminders, "
+                                 "calendar, health, location, weather, photos, notifications, music, "
+                                 "clipboard, opening apps/URLs, HomeKit, maps/navigation, or running "
+                                 "anything on the phone - you MUST call the matching minis-iphone tool "
+                                 "(e.g. iphone_device, iphone_alarm, iphone_calendar) and report the "
+                                 "ACTUAL tool result. Never answer from general knowledge when a tool "
+                                 "exists; the user expects live device data. "
+                                 "Tool guide: iphone_device = hardware/OS/battery/storage status; "
+                                 "iphone_help = full syntax of any native tool; "
+                                 "minis_sessions_* = list/search/read/send Minis conversations; "
+                                 "claude_send/claude_poll = exchange messages with a Claude agent.")}}
 
         if method == "ping":
             return {"jsonrpc": "2.0", "id": rid, "result": {}}
