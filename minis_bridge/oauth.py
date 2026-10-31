@@ -41,7 +41,7 @@ def _db():
     os.makedirs(os.path.dirname(path), exist_ok=True)
     conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA journal_mode=DELETE")  # iSH fakefs: WAL locks unavailable
     conn.execute("PRAGMA busy_timeout=30000")
     return conn
 
