@@ -32,11 +32,11 @@ def _s(t, d):
     return {"type": t, "description": d}
 
 
-def _opt(argv, key, flag, val=None):
-    if key in argv and argv[key] not in (None, ""):
+def _opt(argv, a, key, flag, val=None):
+    if a.get(key) not in (None, ""):
         argv.append(flag)
         if val is not None:
-            argv.append(str(argv[key]))
+            argv.append(str(a[key]))
     return argv
 
 
@@ -107,8 +107,8 @@ def t_homekit(a):
     argv = [act]
     if act == "search":
         argv += ["--query", a.get("query", "")]
-        _opt(argv, "type", "--type")
-        _opt(argv, "room", "--room")
+        _opt(argv, a, "type", "--type")
+        _opt(argv, a, "room", "--room")
     elif act == "get":
         argv += ["--name", a.get("name", "")]
     elif act == "set":
@@ -125,11 +125,11 @@ def t_alarm(a):
     argv = [act]
     if act == "set":
         argv += ["--time", a.get("time", "")]
-        _opt(argv, "label", "--label")
-        _opt(argv, "repeat", "--repeat")
+        _opt(argv, a, "label", "--label")
+        _opt(argv, a, "repeat", "--repeat")
     elif act == "timer":
         argv += ["--duration", a.get("duration", "5m")]
-        _opt(argv, "label", "--label")
+        _opt(argv, a, "label", "--label")
     elif act == "cancel":
         argv += ["--id", a["id"]] if a.get("id") else ["--all"]
     argv += list(a.get("args") or [])
@@ -140,22 +140,22 @@ def t_reminders(a):
     act = a.get("action", "list")
     argv = [act]
     if act == "list":
-        _opt(argv, "list", "--list")
-        _opt(argv, "list_id", "--list-id")
-        _opt(argv, "limit", "--limit")
+        _opt(argv, a, "list", "--list")
+        _opt(argv, a, "list_id", "--list-id")
+        _opt(argv, a, "limit", "--limit")
         if a.get("incomplete"):
             argv += ["--incomplete"]
     elif act == "create":
         argv += ["--title", a.get("title", "")]
-        _opt(argv, "list", "--list")
-        _opt(argv, "list_id", "--list-id")
-        _opt(argv, "due", "--due")
-        _opt(argv, "notes", "--notes")
+        _opt(argv, a, "list", "--list")
+        _opt(argv, a, "list_id", "--list-id")
+        _opt(argv, a, "due", "--due")
+        _opt(argv, a, "notes", "--notes")
     elif act in ("complete", "delete", "read", "update"):
         argv += ["--id", a.get("id", "")]
-        _opt(argv, "title", "--title")
-        _opt(argv, "notes", "--notes")
-        _opt(argv, "due", "--due")
+        _opt(argv, a, "title", "--title")
+        _opt(argv, a, "notes", "--notes")
+        _opt(argv, a, "due", "--due")
     argv += list(a.get("args") or [])
     return apple.run("reminders", *argv)
 
@@ -164,11 +164,11 @@ def t_calendar(a):
     act = a.get("action", "list")
     argv = [act]
     if act == "list":
-        _opt(argv, "start", "--start")
-        _opt(argv, "end", "--end")
-        _opt(argv, "days", "--days")
-        _opt(argv, "limit", "--limit")
-        _opt(argv, "calendar", "--calendar")
+        _opt(argv, a, "start", "--start")
+        _opt(argv, a, "end", "--end")
+        _opt(argv, a, "days", "--days")
+        _opt(argv, a, "limit", "--limit")
+        _opt(argv, a, "calendar", "--calendar")
         if a.get("today"):
             argv += ["--today"]
     elif act == "create":
@@ -177,9 +177,9 @@ def t_calendar(a):
             argv += ["--start", a["start"]]
         if a.get("end"):
             argv += ["--end", a["end"]]
-        _opt(argv, "calendar", "--calendar")
-        _opt(argv, "notes", "--notes")
-        _opt(argv, "location", "--location")
+        _opt(argv, a, "calendar", "--calendar")
+        _opt(argv, a, "notes", "--notes")
+        _opt(argv, a, "location", "--location")
     elif act == "delete":
         argv += ["--id", a.get("id", "")]
     argv += list(a.get("args") or [])
@@ -200,7 +200,7 @@ def t_location(a):
     act = a.get("action", "current")
     argv = [act]
     if act == "current":
-        _opt(argv, "accuracy", "--accuracy")
+        _opt(argv, a, "accuracy", "--accuracy")
     elif act == "geocode":
         argv += ["--lat", a.get("lat", ""), "--lng", a.get("lng", "")]
     elif act == "forward":
@@ -215,9 +215,9 @@ def t_weather(a):
 
 def t_speak(a):
     argv = ["speak", "--text", a.get("text", "")]
-    _opt(argv, "voice", "--voice")
-    _opt(argv, "rate", "--rate")
-    _opt(argv, "pitch", "--pitch")
+    _opt(argv, a, "voice", "--voice")
+    _opt(argv, a, "rate", "--rate")
+    _opt(argv, a, "pitch", "--pitch")
     return apple.run("speak", *argv)
 
 
@@ -230,32 +230,32 @@ def t_maps(a):
     argv = [act]
     if act == "search":
         argv += ["--query", a.get("query", "")]
-        _opt(argv, "lat", "--lat")
-        _opt(argv, "lon", "--lon")
-        _opt(argv, "radius", "--radius")
-        _opt(argv, "limit", "--limit")
+        _opt(argv, a, "lat", "--lat")
+        _opt(argv, a, "lon", "--lon")
+        _opt(argv, a, "radius", "--radius")
+        _opt(argv, a, "limit", "--limit")
     else:
         argv += ["--from", a.get("from", ""), "--to", a.get("to", "")]
-        _opt(argv, "mode", "--mode")
+        _opt(argv, a, "mode", "--mode")
     argv += list(a.get("args") or [])
     return apple.run("maps", *argv)
 
 
 def t_vision(a):
     argv = [a.get("action", "ocr"), a.get("path", "")]
-    _opt(argv, "lang", "--lang")
-    _opt(argv, "level", "--level")
+    _opt(argv, a, "lang", "--lang")
+    _opt(argv, a, "level", "--level")
     return apple.run("vision", *argv)
 
 
 def t_photos(a):
     act = a.get("action", "list")
     argv = [act]
-    _opt(argv, "limit", "--limit")
-    _opt(argv, "album", "--album")
-    _opt(argv, "name", "--name")
-    _opt(argv, "id", "--id")
-    _opt(argv, "path", "--path")
+    _opt(argv, a, "limit", "--limit")
+    _opt(argv, a, "album", "--album")
+    _opt(argv, a, "name", "--name")
+    _opt(argv, a, "id", "--id")
+    _opt(argv, a, "path", "--path")
     argv += list(a.get("args") or [])
     return apple.run("photos", *argv)
 
@@ -284,8 +284,8 @@ def t_media(a):
         argv += ["--set", str(a["volume"])]
     if act == "search":
         argv += ["--query", a.get("query", "")]
-        _opt(argv, "type", "--type")
-        _opt(argv, "limit", "--limit")
+        _opt(argv, a, "type", "--type")
+        _opt(argv, a, "limit", "--limit")
     argv += list(a.get("args") or [])
     return apple.run("media", *argv)
 
