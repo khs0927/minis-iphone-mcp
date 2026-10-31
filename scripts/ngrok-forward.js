@@ -1,14 +1,19 @@
 // Start an ngrok tunnel for the Minis bridge with a STABLE free dev domain.
+//
 //   NGROK_AUTHTOKEN=... node ngrok-forward.js [port]
+//
 // ngrok's free plan assigns one permanent development domain per account, so
 // the public URL survives every restart - which is exactly what a
 // pre-registered claude.ai connector needs.
 //
-// v2: supervisor-friendly — never exit(1) on transient failures.
-// Retries up to CONNECT_RETRIES (default 30, ~5min) with backoff before
-// giving up. Stale "already online" (ERR_NGROK_334 from a zombie double)
-// resolves itself once the zombie dies, so retry in-process instead of
-// forcing the supervisor into a kill/restart loop.
+// v4: NO in-process stale-guard. Reason (verified 2026-11-01): on iSH the
+// child node process cannot read its own ancestor's /proc/<pid>/stat after
+// the immediate shell exits, so any self-scan misclassifies the LIVE leader
+// as stale and kills it (SIGTERM works even when stat read fails). The
+// supervisor (minis-ngrok stop + keepalive-body) owns single-instance
+// enforcement instead: it runs in the parent shell where /proc is readable.
+//  - Runtime: retries up to CONNECT_RETRIES (default 30, ~5min) with backoff
+//    before giving up. Transient failures never exit(1).
 const ngrok = require("@ngrok/ngrok");
 
 const port = parseInt(process.argv[2] || process.env.ORIGIN_PORT || "8901", 10);

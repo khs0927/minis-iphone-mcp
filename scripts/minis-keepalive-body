@@ -6,27 +6,21 @@ LOG=/var/minis/shared/claude-bridge/keepalive.log
 STATE_DIR=/var/minis/shared/claude-bridge
 BRIDGE_PORT=8900
 : keepalive-body-start
-kill_ngrok() {
-  for p in /proc/[0-9]*; do
-    c=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
-    case "$c" in *ngrok-forward*) kill "${p#/proc/}" 2>/dev/null;; esac
-  done
-}
 : bridge-check
 if ! curl -s --max-time 6 http://127.0.0.1:$BRIDGE_PORT/health 2>/dev/null | grep -q '"ok"'; then
   echo $(date): bridge down, restarting >> $LOG
   MINIS_BRIDGE_STATE_DIR=$STATE_DIR MINIS_BRIDGE_PORT=8900 MINIS_BRIDGE_PUBLIC_PORT=8901 MINIS_BRIDGE_ALLOW_PUBLIC_SHELL=1 minis-bridge start --role private >> $LOG 2>&1 || true
 fi
-: ngrok-single-instance-guard
-if pgrep -f 'ngrok-forward\.js' > /dev/null 2>&1; then
-  : forwarder-alive
-else
-  U=$(minis-ngrok url 2>/dev/null || true)
-  if [ -z "$U" ] || ! curl -s --max-time 10 "$U/health" 2>/dev/null | grep -q '"ok"'; then
-    echo $(date): ngrok process missing, restarting >> $LOG
-    kill_ngrok
-    sleep 5
-    minis-ngrok start >> $LOG 2>&1 || true
-  fi
+: ngrok-alive-check-http-first
+NGROK_UP=0
+if curl -s --max-time 10 "https://hailee-aerodynamic-vanesa.ngrok-free.dev/health" 2>/dev/null | grep -q '"ok"'; then
+  NGROK_UP=1
+fi
+: ngrok-restart-if-down
+if [ "$NGROK_UP" = "0" ]; then
+  echo $(date): ngrok down via HTTP, restarting >> $LOG
+  minis-ngrok stop >> $LOG 2>&1 || true
+  sleep 3
+  minis-ngrok start >> $LOG 2>&1 || true
 fi
 : keepalive-body-end

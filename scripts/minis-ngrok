@@ -6,7 +6,7 @@ STATE_DIR=${MINIS_BRIDGE_STATE_DIR:-/var/minis/shared/claude-bridge}
 TOKF=$STATE_DIR/ngrok_authtoken
 LOG=$STATE_DIR/ngrok.log
 URLF=$STATE_DIR/ngrok-url.txt
-PORT=${ORIGIN_PORT:-8901}
+PORT=${ORIGIN_PORT:-8900}
 DOMAIN=${NGROK_DOMAIN:-hailee-aerodynamic-vanesa.ngrok-free.dev}
 MARK=minis-ngrok-forward
 
@@ -17,10 +17,33 @@ alive() {
   done
   return 1
 }
+# leader_pid: the group leader of the live forwarder (its ppid is NOT another
+# ngrok-forward pid). Prints the leader pid or nothing.
+leader_pid() {
+  for p in /proc/[0-9]*; do
+    ppid=$(cut -d' ' -f4 < $p/stat 2>/dev/null) || continue
+    c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+    case "$c" in *ngrok-forward.js*) :;; *) continue;; esac
+    pc=$(tr '\0' ' ' < /proc/$ppid/cmdline 2>/dev/null) || pc=""
+    case "$pc" in *ngrok-forward.js*) continue;; esac
+    echo "${p#/proc/}"
+    return 0
+  done
+  return 1
+}
 
 case "$1" in
   start)
-    alive && { echo "already running: $(cat $URLF 2>/dev/null)"; exit 0; }
+    if leader_pid >/dev/null 2>&1; then
+      echo "already running: $(cat $URLF 2>/dev/null)"
+      exit 0
+    fi
+    # no live leader: sweep any leftovers (zombies/workers of a dead leader)
+    for p in /proc/[0-9]*; do
+      c=$(tr '\0' ' ' < $p/cmdline 2>/dev/null) || continue
+      case "$c" in *ngrok-forward.js*) kill "${p#/proc/}" 2>/dev/null;; esac
+    done
+    sleep 2
     [ -f "$TOKF" ] || { echo "missing $TOKF"; exit 1; }
     cd /opt/ngrok
     NGROK_AUTHTOKEN=$(cat "$TOKF") NGROK_DOMAIN=$DOMAIN nohup sh -c "ulimit -s 8192; exec node /opt/ngrok/ngrok-forward.js $PORT # $MARK" >> "$LOG" 2>&1 &
@@ -39,7 +62,7 @@ case "$1" in
     done
     echo stopped ;;
   status)
-    alive && echo "NGROK UP" || echo "NGROK DOWN"
+    if leader_pid >/dev/null 2>&1; then echo "NGROK UP"; else echo "NGROK DOWN"; fi
     echo "url: $(cat $URLF 2>/dev/null)"
     tail -2 "$LOG" 2>/dev/null ;;
   url) cat "$URLF" 2>/dev/null ;;
