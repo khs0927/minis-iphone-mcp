@@ -7,6 +7,7 @@ import threading
 import time
 import types
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -39,6 +40,18 @@ class Client:
         hdr = {"Content-Type": "application/json"}
         hdr.update(headers or {})
         req = urllib.request.Request(self.base + path, data=data, method=method, headers=hdr)
+        try:
+            with self.opener.open(req, timeout=timeout) as r:
+                return r.status, r.read().decode()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()
+
+    def raw_form(self, path, payload, headers=None, timeout=15):
+        """POST with application/x-www-form-urlencoded (RFC 6749 style)."""
+        data = urllib.parse.urlencode(payload).encode()
+        hdr = {"Content-Type": "application/x-www-form-urlencoded"}
+        hdr.update(headers or {})
+        req = urllib.request.Request(self.base + path, data=data, method="POST", headers=hdr)
         try:
             with self.opener.open(req, timeout=timeout) as r:
                 return r.status, r.read().decode()

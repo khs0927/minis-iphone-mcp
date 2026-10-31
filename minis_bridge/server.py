@@ -173,6 +173,14 @@ class Handler(BaseHTTPRequestHandler):
         if n <= 0:
             return {}
         raw = self.rfile.read(n)
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype == "application/x-www-form-urlencoded":
+            # OAuth token clients (RFC 6749) post form data, not JSON.
+            try:
+                return {k: v[0] for k, v in parse_qs(
+                    raw.decode("utf-8", "replace"), keep_blank_values=True).items()}
+            except Exception:
+                pass
         try:
             return json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):

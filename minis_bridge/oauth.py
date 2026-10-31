@@ -226,7 +226,10 @@ def _token(handler):
                                         "error_description": "PKCE verification failed"})
         token = _mint(row["client_id"], row["scope"])
         return handler._send(200, {"access_token": token, "token_type": "Bearer",
-                                   "expires_in": _TTL, "scope": row["scope"]})
+                                   "expires_in": _TTL, "scope": row["scope"],
+                                   # MCP connectors (Grok etc.) expect a refresh grant to
+                                   # exist; the same value works with our refresh handler.
+                                   "refresh_token": token})
     if grant == "refresh_token":
         rt = body.get("refresh_token", "")
         with _LOCK, _db() as conn:

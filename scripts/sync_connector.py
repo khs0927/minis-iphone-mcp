@@ -124,27 +124,33 @@ def main():
     """.replace("NAME", json.dumps(args.name)))
     wait(3)
     detail = js("""
-    const m=document.body.innerText.match(/https:\\/\\/[a-z0-9-]+\\.trycloudflare\\.com[^\\s]*/);
-    return m ? m[0] : 'none';
+    const m=document.body.innerText.match(/https:\\/\\/[^\\s"']+/g);
+    return m ? m.join(' ') : 'none';
     """)
     print("connector url now : %s" % detail[:120])
     if mcp_url in detail:
         print("already in sync - nothing to do")
         return 0
 
-    # 3. delete the stale connector
+    # 3. delete the stale connector (claude.ai menu says 제거/remove, not 삭제)
     js("""
-    const b=[...document.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||'').includes('더 많은 옵션'));
+    const main=document.querySelector('main')||document.body;
+    const b=[...main.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||'').includes('더 많은 옵션'))
+      || [...document.querySelectorAll('button')].find(x=>(x.getAttribute('aria-label')||'').includes('더 많은 옵션'));
     if(b){ b.click(); return 'menu'; } return 'no menu';
     """)
     wait(1)
     js("""
-    const d=[...document.querySelectorAll('[role="menuitem"],li,button')].find(x=>x.offsetParent&&(x.innerText||'').trim()==='삭제');
+    const leaves=[...document.querySelectorAll('*')].filter(e=>e.offsetParent&&e.children.length===0&&(e.textContent||'').trim()==='제거');
+    if(leaves.length){ leaves[0].click(); return 'delete clicked'; }
+    const d=[...document.querySelectorAll('[role="menuitem"],li,button')].find(x=>x.offsetParent&&(x.innerText||'').trim()==='제거');
     if(d){ d.click(); return 'delete clicked'; } return 'no delete';
     """)
     wait(2)
     js("""
-    const c=[...document.querySelectorAll('button')].filter(b=>b.offsetParent&&(b.innerText||'').trim()==='삭제');
+    const dlg=[...document.querySelectorAll('[role="dialog"],[role="alertdialog"]')].filter(d=>d.offsetParent);
+    const root=dlg.length?dlg[dlg.length-1]:document;
+    const c=[...root.querySelectorAll('button')].filter(b=>b.offsetParent&&(b.innerText||'').trim()==='제거');
     if(c.length){ c[c.length-1].click(); return 'confirmed'; } return 'no confirm';
     """)
     wait(3)
@@ -234,8 +240,8 @@ def main():
     """)
     wait(3)
     check = js("""
-    const m=document.body.innerText.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com[^\s]*/);
-    return m ? m[0] : 'none';
+    const m=document.body.innerText.match(/https:\/\/[^\s"']+/g);
+    return m ? m.join(' ') : 'none';
     """)
     print("connector url now : %s" % check[:120])
     if base in check:

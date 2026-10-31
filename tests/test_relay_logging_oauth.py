@@ -4,6 +4,8 @@ import threading
 import time
 import urllib.parse
 
+import pytest
+
 from minis_bridge import logging_setup
 from minis_bridge.store import RelayStore
 
@@ -103,7 +105,8 @@ def test_oauth_discovery(client, cfg):
     assert doc["code_challenge_methods_supported"] == ["S256"]
 
 
-def test_oauth_registration_and_token_exchange(client, cfg):
+@pytest.mark.parametrize("form_encoded", [False, True])
+def test_oauth_registration_and_token_exchange(client, cfg, form_encoded):
     status, body = client.raw("/register", "POST",
                                {"client_name": "test", "redirect_uris": ["https://example.com/cb"]})
     assert status == 201
@@ -146,12 +149,26 @@ def test_oauth_registration_and_token_exchange(client, cfg):
     assert row is not None
     code = row["code"]
 
-    status, body = client.raw("/token", "POST", {
+    token_payload = {
         "grant_type": "authorization_code", "code": code,
         "client_id": reg["client_id"], "redirect_uri": "https://example.com/cb",
-        "code_verifier": verifier})
+        "code_verifier": verifier}
+    if form_encoded:
+        # real OAuth clients (MCP connectors) post form data per RFC 6749
+        status, body = client.raw_form("/token", token_payload)
+    else:
+        status, body = client.raw("/token", "POST", token_payload)
     assert status == 200
-    token = json.loads(body)["access_token"]
+    tok = json.loads(body)
+    token = tok["access_token"]
+
+    # the advertised refresh grant must work with the issued refresh token
+    assert tok.get("refresh_token")
+    status, body = client.raw_form("/token", {
+        "grant_type": "refresh_token", "refresh_token": tok["refresh_token"]})
+    assert status == 200
+    token2 = json.loads(body)["access_token"]
+    assert token2 != token
 
     # the access token authenticates the MCP endpoint
     status, body = client.rpc("tools/list", token=token)
