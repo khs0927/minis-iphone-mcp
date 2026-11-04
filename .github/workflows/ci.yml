@@ -8,7 +8,10 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to Ubuntu 26.04 on 2026-10-19, where actions/python-versions
+    # ships no CPython 3.9 build. Pin to 24.04 (last LTS with a 3.9 build) so the
+    # declared requires-python ">=3.9" support stays covered.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
